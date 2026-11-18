@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BatchRenamerView: View {
+    @ObservedObject private var api = ApiSettingsStore.shared
     @State private var items: [RenameItem] = []
     @State private var selectedFolderURL: URL? = nil
     @State private var folderTitle: String = "No Folder Selected"
@@ -53,17 +54,39 @@ struct BatchRenamerView: View {
 
                 // Preset Action Bar
                 HStack(spacing: 8) {
-                    presetChip(title: "Strip Msg ID", icon: "wand.and.stars", color: AppTheme.cyan) {
+                    presetChip(title: "Strip ID", icon: "wand.and.stars", color: AppTheme.cyan) {
                         applyStripMsgIds()
                     }
-                    presetChip(title: "Fast Regex", icon: "textformat.123", color: AppTheme.amber) {
+                    presetChip(title: "Regex", icon: "textformat.123", color: AppTheme.amber) {
                         applyRegexPreset()
                     }
-                    presetChip(title: "Gemini AI", icon: "sparkles", color: AppTheme.primaryLight) {
-                        applyGeminiAI()
+                    presetChip(title: "Gemini", icon: "sparkles", color: AppTheme.primaryLight) {
+                        applyAI(provider: .gemini)
+                    }
+                    presetChip(title: "DeepSeek", icon: "brain", color: AppTheme.emerald) {
+                        applyAI(provider: .deepseek)
                     }
                 }
                 .disabled(items.isEmpty || isProcessing)
+
+                if !api.hasGeminiKey && !api.hasDeepSeekKey {
+                    NavigationLink(destination: ApiSetupView()) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "key.fill")
+                                .foregroundColor(AppTheme.amber)
+                            Text("Import Gemini or DeepSeek API Key to enable AI Renaming")
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(AppTheme.textPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .padding(10)
+                        .background(AppTheme.amber.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
 
                 if isProcessing {
                     ProgressView("Processing...")
@@ -256,15 +279,25 @@ struct BatchRenamerView: View {
         statusBanner = "Preview updated: Fast Regex series format applied."
     }
 
-    private func applyGeminiAI() {
+    private func applyAI(provider: AIProvider) {
         isProcessing = true
         statusBanner = nil
         let snapshot = items
+        let key = provider == .gemini ? api.geminiApiKey : api.deepseekApiKey
+        let model = provider == .gemini ? api.geminiModel : api.deepseekModel
+        let endpoint = api.deepseekEndpoint
+
         Task {
-            let updated = await GeminiRenamerService.renameWithGemini(items: snapshot)
-            items = updated
+            let result = await GeminiRenamerService.renameWithAI(
+                items: snapshot,
+                provider: provider,
+                apiKey: key,
+                modelName: model,
+                deepseekEndpoint: endpoint
+            )
+            items = result.items
             isProcessing = false
-            statusBanner = "Gemini AI renaming generated!"
+            statusBanner = result.note
         }
     }
 

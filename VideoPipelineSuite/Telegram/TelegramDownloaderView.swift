@@ -1,5 +1,13 @@
 import SwiftUI
 
+struct TelegramBotMediaItem: Identifiable {
+    let id: String
+    let fileId: String
+    let fileName: String
+    let caption: String
+    let sizeBytes: Int64
+}
+
 final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var isDownloading: Bool = false
     @Published var progress: Double = 0
@@ -14,17 +22,21 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
     private var session: URLSession?
     private var currentTask: URLSessionDownloadTask?
 
-    func startDownload(from urlString: String) {
+    func startDownload(from urlString: String, customFileName: String? = nil) {
         guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             errorMessage = "Please enter a valid HTTP/HTTPS link."
             return
         }
 
-        let lastSeg = url.lastPathComponent
-        if !lastSeg.isEmpty && lastSeg.contains(".") {
-            targetFileName = lastSeg
+        if let custom = customFileName, !custom.isEmpty {
+            targetFileName = custom
         } else {
-            targetFileName = "telegram_video_\(Int(Date().timeIntervalSince1970)).mp4"
+            let lastSeg = url.lastPathComponent
+            if !lastSeg.isEmpty && lastSeg.contains(".") {
+                targetFileName = lastSeg
+            } else {
+                targetFileName = "telegram_video_\(Int(Date().timeIntervalSince1970)).mp4"
+            }
         }
 
         filename = targetFileName
@@ -116,8 +128,13 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
 }
 
 struct TelegramDownloaderView: View {
+    @ObservedObject private var api = ApiSettingsStore.shared
     @StateObject private var downloader = StreamingDownloadManager()
     @State private var urlInput: String = ""
+
+    @State private var botMediaItems: [TelegramBotMediaItem] = []
+    @State private var isLoadingBotInbox: Bool = false
+    @State private var botStatusNote: String? = nil
 
     var body: some View {
         ZStack {
@@ -125,12 +142,125 @@ struct TelegramDownloaderView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
+                    // Telegram Login / Account Connection Card
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("Telegram / Direct Video Link", systemImage: "paperplane.fill")
+                        HStack {
+                            Label("Telegram Connection", systemImage: "person.badge.key.fill")
+                                .font(.headline)
+                                .foregroundColor(AppTheme.amber)
+                            Spacer()
+                            if api.isTelegramConfigured {
+                                Text(api.telegramConnectedUsername.isEmpty ? "Configured" : "@\(api.telegramConnectedUsername)")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(AppTheme.emerald.opacity(0.2))
+                                    .foregroundColor(AppTheme.emerald)
+                                    .clipShape(Capsule())
+                            } else {
+                                Text("Not Logged In")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(AppTheme.danger.opacity(0.18))
+                                    .foregroundColor(AppTheme.danger)
+                                    .clipShape(Capsule())
+                            }
+                        }
+
+                        if api.hasTelegramMTProto {
+                            Text("MTProto Account: \(api.telegramPhone) (API ID: \(api.telegramApiId))")
+                                .font(.caption)
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        HStack(spacing: 10) {
+                            NavigationLink(destination: ApiSetupView()) {
+                                Label(api.isTelegramConfigured ? "Manage Telegram Login" : "Login Telegram / Import API", systemImage: "gearshape.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(AppTheme.primary)
+                                    .foregroundColor(.white)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+
+                            if api.hasTelegramBot {
+                                Button {
+                                    fetchBotMediaInbox()
+                                } label: {
+                                    if isLoadingBotInbox {
+                                        ProgressView().tint(.black)
+                                    } else {
+                                        Label("Sync Bot Videos", systemImage: "arrow.clockwise")
+                                    }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(AppTheme.emerald)
+                                .foregroundColor(.black)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .disabled(isLoadingBotInbox)
+                            }
+                        }
+
+                        if let note = botStatusNote {
+                            Text(note)
+                                .font(.caption)
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                    }
+                    .pipelineCard()
+
+                    // Recent Videos Sent to Telegram Bot
+                    if !botMediaItems.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Telegram Bot Video Inbox (\(botMediaItems.count))")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundColor(AppTheme.textPrimary)
+
+                            ForEach(botMediaItems) { item in
+                                HStack(spacing: 10) {
+                                    Image(systemName: "film.fill")
+                                        .foregroundColor(AppTheme.cyan)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.fileName)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                            .lineLimit(1)
+                                        Text(String(format: "%.1f MB %@", Double(item.sizeBytes) / (1024 * 1024), item.caption.isEmpty ? "" : "• \(item.caption)"))
+                                            .font(.caption2)
+                                            .foregroundColor(AppTheme.textSecondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Button("Download") {
+                                        downloadTelegramBotFile(item)
+                                    }
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(AppTheme.cyan)
+                                    .foregroundColor(.black)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .disabled(downloader.isDownloading)
+                                }
+                                .padding(10)
+                                .background(AppTheme.surfaceCardElevated)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                        }
+                        .pipelineCard()
+                    }
+
+                    // Direct Video / Stream Link Card
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Direct Video / Stream Link", systemImage: "paperplane.fill")
                             .font(.headline)
                             .foregroundColor(AppTheme.cyan)
 
-                        Text("Paste a direct video download link or stream URL. Downloaded files appear directly in Apple Files under On My iPhone → Video Pipeline → Downloads.")
+                        Text("Paste any direct video download URL. Files save to Apple Files under On My iPhone → Video Pipeline → Downloads.")
                             .font(.caption)
                             .foregroundColor(AppTheme.textSecondary)
 
@@ -220,5 +350,79 @@ struct TelegramDownloaderView: View {
         }
         .navigationTitle("Telegram Downloader")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func fetchBotMediaInbox() {
+        let token = api.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty,
+              let url = URL(string: "https://api.telegram.org/bot\(token)/getUpdates?limit=50") else {
+            botStatusNote = "Please set your Telegram Bot Token in API Setup first."
+            return
+        }
+
+        isLoadingBotInbox = true
+        botStatusNote = nil
+
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(for: URLRequest(url: url))
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let ok = json["ok"] as? Bool, ok,
+                   let updates = json["result"] as? [[String: Any]] {
+                    var found: [TelegramBotMediaItem] = []
+                    for upd in updates.reversed() {
+                        let msg = (upd["message"] as? [String: Any]) ?? (upd["channel_post"] as? [String: Any])
+                        guard let m = msg else { continue }
+                        let caption = m["caption"] as? String ?? ""
+                        let msgId = m["message_id"] as? Int ?? Int.random(in: 1...99999)
+
+                        if let video = m["video"] as? [String: Any],
+                           let fileId = video["file_id"] as? String {
+                            let name = video["file_name"] as? String ?? "tg_video_\(msgId).mp4"
+                            let size = (video["file_size"] as? NSNumber)?.int64Value ?? 0
+                            found.append(TelegramBotMediaItem(id: "\(msgId)_\(fileId)", fileId: fileId, fileName: name, caption: caption, sizeBytes: size))
+                        } else if let doc = m["document"] as? [String: Any],
+                                  let fileId = doc["file_id"] as? String {
+                            let name = doc["file_name"] as? String ?? "tg_doc_\(msgId).mp4"
+                            let size = (doc["file_size"] as? NSNumber)?.int64Value ?? 0
+                            found.append(TelegramBotMediaItem(id: "\(msgId)_\(fileId)", fileId: fileId, fileName: name, caption: caption, sizeBytes: size))
+                        }
+                    }
+                    botMediaItems = found
+                    botStatusNote = found.isEmpty ? "No recent videos in Bot inbox. Forward or send a video to your bot, then tap Sync." : "Found \(found.count) video(s) from your Telegram Bot."
+                } else {
+                    botStatusNote = "Could not fetch updates. Check your Bot Token in API Setup."
+                }
+            } catch {
+                botStatusNote = "Sync error: \(error.localizedDescription)"
+            }
+            isLoadingBotInbox = false
+        }
+    }
+
+    private func downloadTelegramBotFile(_ item: TelegramBotMediaItem) {
+        let token = api.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty,
+              let getFileURL = URL(string: "https://api.telegram.org/bot\(token)/getFile?file_id=\(item.fileId)") else { return }
+
+        botStatusNote = "Resolving Telegram file link..."
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(for: URLRequest(url: getFileURL))
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let ok = json["ok"] as? Bool, ok,
+                   let result = json["result"] as? [String: Any],
+                   let filePath = result["file_path"] as? String {
+                    let downloadURL = "https://api.telegram.org/file/bot\(token)/\(filePath)"
+                    botStatusNote = nil
+                    downloader.startDownload(from: downloadURL, customFileName: item.fileName)
+                } else {
+                    let desc = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["description"] as? String ?? "Telegram Bot API supports direct file downloads up to 20 MB."
+                    botStatusNote = "Telegram error: \(desc)"
+                }
+            } catch {
+                botStatusNote = "Error: \(error.localizedDescription)"
+            }
+        }
     }
 }

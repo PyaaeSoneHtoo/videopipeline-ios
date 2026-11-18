@@ -4,6 +4,7 @@ import Photos
 import UniformTypeIdentifiers
 
 struct VideoTrimmerView: View {
+    @ObservedObject private var api = ApiSettingsStore.shared
     @State private var selectedVideoURL: URL? = nil
     @State private var selectedVideoName: String = "No video selected"
     @State private var durationText: String = "Duration: --:--"
@@ -11,6 +12,8 @@ struct VideoTrimmerView: View {
     @State private var player: AVPlayer? = nil
     @State private var showFilePicker: Bool = false
 
+    @State private var isScanningAI: Bool = false
+    @State private var aiProvider: AIProvider = ApiSettingsStore.shared.preferredProvider
     @State private var isTrimming: Bool = false
     @State private var trimProgress: Double = 0
     @State private var statusMessage: String? = nil
@@ -112,6 +115,46 @@ struct VideoTrimmerView: View {
                             quickCutButton("10.0s") { cutSecondsText = "10.0" }
                             quickCutButton("15.0s") { cutSecondsText = "15.0" }
                             quickCutButton("30.0s") { cutSecondsText = "30.0" }
+                        }
+
+                        Divider().background(AppTheme.surfaceCardBorder).padding(.vertical, 4)
+
+                        // AI Vision Ad Detection (Gemini / DeepSeek)
+                        HStack {
+                            Label("AI Auto-Detect Intro Ad", systemImage: "sparkles")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(AppTheme.primaryLight)
+                            Spacer()
+                            Picker("AI", selection: $aiProvider) {
+                                ForEach(AIProvider.allCases) { p in
+                                    Text(p.rawValue).tag(p)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 170)
+                        }
+
+                        Button {
+                            runAIAdDetection()
+                        } label: {
+                            if isScanningAI {
+                                HStack(spacing: 8) {
+                                    ProgressView().tint(.white)
+                                    Text("Scanning frames with \(aiProvider.rawValue)...")
+                                }
+                            } else {
+                                Label("Scan Intro with \(aiProvider.rawValue) Vision AI", systemImage: "wand.and.stars")
+                            }
+                        }
+                        .buttonStyle(PrimaryButtonStyle(color: AppTheme.primary))
+                        .disabled(selectedVideoURL == nil || isScanningAI || isTrimming)
+
+                        if (aiProvider == .gemini && !api.hasGeminiKey) || (aiProvider == .deepseek && !api.hasDeepSeekKey) {
+                            NavigationLink(destination: ApiSetupView()) {
+                                Text("Configure \(aiProvider.rawValue) API Key in API Setup →")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(AppTheme.amber)
+                            }
                         }
                     }
                     .pipelineCard()
@@ -246,6 +289,40 @@ struct VideoTrimmerView: View {
             }
         } catch {
             statusMessage = "Failed to open video: \(error.localizedDescription)"
+        }
+    }
+
+    private func runAIAdDetection() {
+        guard let inputURL = selectedVideoURL else { return }
+        let key = aiProvider == .gemini ? api.geminiApiKey : api.deepseekApiKey
+        let model = aiProvider == .gemini ? api.geminiModel : api.deepseekModel
+        let endpoint = api.deepseekEndpoint
+
+        isScanningAI = true
+        statusMessage = nil
+
+        Task {
+            do {
+                let res = try await AIAdDetectorService.detectIntroAd(
+                    videoURL: inputURL,
+                    provider: aiProvider,
+                    apiKey: key,
+                    modelName: model,
+                    deepseekEndpoint: endpoint
+                )
+                isScanningAI = false
+                if res.adDetected && res.cutSeconds > 0 {
+                    cutSecondsText = String(format: "%.1f", res.cutSeconds)
+                    statusMessage = "AI detected \(res.adType) ending at \(String(format: "%.1f", res.cutSeconds))s — \(res.reason)"
+                    let seekTime = CMTime(seconds: res.cutSeconds, preferredTimescale: 600)
+                    _ = await player?.seek(to: seekTime)
+                } else {
+                    statusMessage = "AI Scan: \(res.reason)"
+                }
+            } catch {
+                isScanningAI = false
+                statusMessage = "AI Scan Error: \(error.localizedDescription)"
+            }
         }
     }
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject var session: UserSession
+    @ObservedObject private var api = ApiSettingsStore.shared
 
     var body: some View {
         NavigationStack {
@@ -16,11 +17,20 @@ struct DashboardView: View {
                                 Text("Video Pipeline Suite")
                                     .font(.title2.bold())
                                     .foregroundColor(AppTheme.textPrimary)
-                                Text("iOS Edition • v1.0.0")
+                                Text("iOS Edition • v1.1.0")
                                     .font(.caption)
                                     .foregroundColor(AppTheme.textSecondary)
                             }
                             Spacer()
+                            NavigationLink(destination: ApiSetupView()) {
+                                Image(systemName: "key.fill")
+                                    .font(.subheadline)
+                                    .foregroundColor(AppTheme.amber)
+                                    .padding(10)
+                                    .background(AppTheme.surfaceCard)
+                                    .clipShape(Circle())
+                                    .overlay(Circle().stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+                            }
                             NavigationLink(destination: SettingsView()) {
                                 Image(systemName: "gearshape.fill")
                                     .font(.title3)
@@ -61,6 +71,27 @@ struct DashboardView: View {
                         }
                         .pipelineCard()
 
+                        // API & Telegram Quick Status Bar
+                        NavigationLink(destination: ApiSetupView()) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Label("API Keys & Telegram Login", systemImage: "key.horizontal.fill")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                    Spacer()
+                                    Text("Configure →")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundColor(AppTheme.primaryLight)
+                                }
+                                HStack(spacing: 8) {
+                                    apiPill(name: "Gemini", active: api.hasGeminiKey)
+                                    apiPill(name: "DeepSeek", active: api.hasDeepSeekKey)
+                                    apiPill(name: "Telegram", active: api.isTelegramConfigured)
+                                }
+                            }
+                            .pipelineCard(cornerRadius: 14, padding: 14)
+                        }
+
                         // Tools Grid Header
                         HStack {
                             Text("Automation Tools")
@@ -75,7 +106,7 @@ struct DashboardView: View {
                             NavigationLink(destination: BatchRenamerView()) {
                                 toolCard(
                                     title: "Batch Video Renamer",
-                                    subtitle: "Strip Telegram IDs, Fast Regex & Gemini AI renaming",
+                                    subtitle: "Strip Telegram IDs, Fast Regex, Gemini & DeepSeek AI",
                                     icon: "tag.fill",
                                     accent: AppTheme.primaryLight
                                 )
@@ -83,8 +114,8 @@ struct DashboardView: View {
 
                             NavigationLink(destination: VideoTrimmerView()) {
                                 toolCard(
-                                    title: "Lossless Intro Trimmer",
-                                    subtitle: "Instant ad & intro cutting without re-encoding",
+                                    title: "AI Ad Cutter & Lossless Trimmer",
+                                    subtitle: "Gemini/DeepSeek intro ad scan + lossless trimming",
                                     icon: "scissors",
                                     accent: AppTheme.emerald
                                 )
@@ -115,6 +146,20 @@ struct DashboardView: View {
             .navigationBarHidden(true)
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func apiPill(name: String, active: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: active ? "checkmark.circle.fill" : "circle")
+                .font(.caption2)
+            Text(name)
+                .font(.caption2.weight(.semibold))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background((active ? AppTheme.emerald : AppTheme.textMuted).opacity(0.16))
+        .foregroundColor(active ? AppTheme.emerald : AppTheme.textSecondary)
+        .clipShape(Capsule())
     }
 
     private func toolCard(title: String, subtitle: String, icon: String, accent: Color) -> some View {

@@ -62,6 +62,31 @@ struct SettingsView: View {
                     }
                     .pipelineCard()
 
+                    // API Keys & Telegram Login Entry
+                    NavigationLink(destination: ApiSetupView()) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "key.horizontal.fill")
+                                .font(.title3)
+                                .foregroundColor(AppTheme.emerald)
+                                .frame(width: 40, height: 40)
+                                .background(AppTheme.emerald.opacity(0.16))
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("API Keys & Telegram Login")
+                                    .font(.headline)
+                                    .foregroundColor(AppTheme.textPrimary)
+                                Text("Import .env/JSON, Gemini, DeepSeek & Telegram Bot/MTProto")
+                                    .font(.caption)
+                                    .foregroundColor(AppTheme.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.bold())
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .pipelineCard(cornerRadius: 16, padding: 14)
+                    }
+
                     // Storage Info Card
                     VStack(alignment: .leading, spacing: 8) {
                         Label("iOS Files Integration", systemImage: "folder.badge.gearshape")
