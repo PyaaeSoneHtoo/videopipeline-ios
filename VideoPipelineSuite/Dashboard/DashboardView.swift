@@ -10,14 +10,14 @@ struct DashboardView: View {
                 AppTheme.bgDark.ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: 16) {
                         // Top Brand & Settings Header
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Video Pipeline Suite")
                                     .font(.title2.bold())
                                     .foregroundColor(AppTheme.textPrimary)
-                                Text("iOS Edition • v1.1.0")
+                                Text("iOS Studio • v1.2.0")
                                     .font(.caption)
                                     .foregroundColor(AppTheme.textSecondary)
                             }
@@ -71,6 +71,27 @@ struct DashboardView: View {
                         }
                         .pipelineCard()
 
+                        // Hero 2-Column Studio Cards: Downloader & Uploader
+                        HStack(spacing: 12) {
+                            NavigationLink(destination: TelegramDownloaderView()) {
+                                heroStudioTile(
+                                    title: "Downloader",
+                                    subtitle: "Telegram & Direct",
+                                    icon: "arrow.down.circle.fill",
+                                    gradient: [AppTheme.cyan, AppTheme.emerald]
+                                )
+                            }
+
+                            NavigationLink(destination: UploaderStudioView()) {
+                                heroStudioTile(
+                                    title: "Uploader",
+                                    subtitle: "Telegram & TikTok",
+                                    icon: "arrow.up.circle.fill",
+                                    gradient: [AppTheme.primary, AppTheme.cyan]
+                                )
+                            }
+                        }
+
                         // API & Telegram Quick Status Bar
                         NavigationLink(destination: ApiSetupView()) {
                             VStack(alignment: .leading, spacing: 10) {
@@ -79,7 +100,7 @@ struct DashboardView: View {
                                         .font(.subheadline.weight(.bold))
                                         .foregroundColor(AppTheme.textPrimary)
                                     Spacer()
-                                    Text("Configure →")
+                                    Text("Setup →")
                                         .font(.caption.weight(.semibold))
                                         .foregroundColor(AppTheme.primaryLight)
                                 }
@@ -92,17 +113,26 @@ struct DashboardView: View {
                             .pipelineCard(cornerRadius: 14, padding: 14)
                         }
 
-                        // Tools Grid Header
+                        // Additional Suite Tools Header
                         HStack {
-                            Text("Automation Tools")
+                            Text("AI & Media Tools")
                                 .font(.headline)
                                 .foregroundColor(AppTheme.textPrimary)
                             Spacer()
                         }
-                        .padding(.top, 4)
+                        .padding(.top, 2)
 
                         // Tool Navigation Cards
                         VStack(spacing: 12) {
+                            NavigationLink(destination: VideoTrimmerView()) {
+                                toolCard(
+                                    title: "AI Ad Cutter & Lossless Trimmer",
+                                    subtitle: "Gemini/DeepSeek intro ad scan + instant lossless cut",
+                                    icon: "scissors",
+                                    accent: AppTheme.emerald
+                                )
+                            }
+
                             NavigationLink(destination: BatchRenamerView()) {
                                 toolCard(
                                     title: "Batch Video Renamer",
@@ -112,28 +142,10 @@ struct DashboardView: View {
                                 )
                             }
 
-                            NavigationLink(destination: VideoTrimmerView()) {
-                                toolCard(
-                                    title: "AI Ad Cutter & Lossless Trimmer",
-                                    subtitle: "Gemini/DeepSeek intro ad scan + lossless trimming",
-                                    icon: "scissors",
-                                    accent: AppTheme.emerald
-                                )
-                            }
-
-                            NavigationLink(destination: TelegramDownloaderView()) {
-                                toolCard(
-                                    title: "Telegram & Direct Downloader",
-                                    subtitle: "High-speed stream downloads directly to iOS Files",
-                                    icon: "paperplane.fill",
-                                    accent: AppTheme.cyan
-                                )
-                            }
-
                             NavigationLink(destination: YouTubeDownloaderView()) {
                                 toolCard(
                                     title: "YouTube Downloader",
-                                    subtitle: "Fetch metadata & export MP4 / MP3 streams",
+                                    subtitle: "HD thumbnail preview + MP4 / MP3 stream export",
                                     icon: "play.rectangle.fill",
                                     accent: AppTheme.danger
                                 )
@@ -146,6 +158,41 @@ struct DashboardView: View {
             .navigationBarHidden(true)
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func heroStudioTile(title: String, subtitle: String, icon: String, gradient: [Color]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.18))
+                        .frame(width: 42, height: 42)
+                    Image(systemName: icon)
+                        .font(.title2)
+                        .foregroundColor(.white)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.bold())
+                    .foregroundColor(.white.opacity(0.8))
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline.bold())
+                    .foregroundColor(.white)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(colors: gradient, startPoint: .topLeading, endPoint: .bottomTrailing)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .shadow(color: gradient.first?.opacity(0.28) ?? .clear, radius: 12, x: 0, y: 6)
     }
 
     private func apiPill(name: String, active: Bool) -> some View {
@@ -167,9 +214,9 @@ struct DashboardView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 14)
                     .fill(accent.opacity(0.16))
-                    .frame(width: 52, height: 52)
+                    .frame(width: 50, height: 50)
                 Image(systemName: icon)
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundColor(accent)
             }
 

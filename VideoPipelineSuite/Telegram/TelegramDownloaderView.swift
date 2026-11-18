@@ -1,4 +1,6 @@
 import SwiftUI
+import AVKit
+import UIKit
 
 struct TelegramBotMediaItem: Identifiable {
     let id: String
@@ -6,6 +8,11 @@ struct TelegramBotMediaItem: Identifiable {
     let fileName: String
     let caption: String
     let sizeBytes: Int64
+}
+
+struct PreviewVideoItem: Identifiable {
+    let id = UUID()
+    let url: URL
 }
 
 final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
@@ -88,7 +95,9 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
             } else {
                 self.percentText = String(format: "Downloaded %.1f MB", writtenMB)
             }
-            self.speedText = String(format: "%.1f KB/s", speedKBps)
+            self.speedText = speedKBps >= 1024
+                ? String(format: "%.2f MB/s", speedKBps / 1024.0)
+                : String(format: "%.0f KB/s", speedKBps)
         }
     }
 
@@ -105,8 +114,8 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
             Task { @MainActor in
                 self.isDownloading = false
                 self.progress = 1.0
-                self.percentText = "100% - Download Completed!"
-                self.speedText = "Saved in Files -> Video Pipeline -> Downloads"
+                self.percentText = "100% Completed"
+                self.speedText = "Saved to Files → Downloads"
                 self.savedFileURL = destURL
             }
         } catch {
@@ -128,228 +137,521 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
 }
 
 struct TelegramDownloaderView: View {
+    private enum DownloadTab: String, CaseIterable, Identifiable {
+        case inbox = "Bot Inbox"
+        case direct = "Direct URL"
+        case files = "Downloads"
+        var id: String { rawValue }
+    }
+
     @ObservedObject private var api = ApiSettingsStore.shared
     @StateObject private var downloader = StreamingDownloadManager()
+
+    @State private var activeTab: DownloadTab = .inbox
     @State private var urlInput: String = ""
+    @State private var searchQuery: String = ""
 
     @State private var botMediaItems: [TelegramBotMediaItem] = []
     @State private var isLoadingBotInbox: Bool = false
     @State private var botStatusNote: String? = nil
 
+    @State private var downloadedFiles: [URL] = []
+    @State private var previewItem: PreviewVideoItem? = nil
+
+    private var filteredBotItems: [TelegramBotMediaItem] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return botMediaItems }
+        return botMediaItems.filter {
+            $0.fileName.lowercased().contains(q) || $0.caption.lowercased().contains(q)
+        }
+    }
+
     var body: some View {
         ZStack {
             AppTheme.bgDark.ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: 16) {
-                    // Telegram Login / Account Connection Card
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Label("Telegram Connection", systemImage: "person.badge.key.fill")
+            VStack(spacing: 0) {
+                // Studio Header Bar
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(LinearGradient(colors: [AppTheme.cyan, AppTheme.emerald], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 44, height: 44)
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Downloader Studio")
                                 .font(.headline)
+                                .foregroundColor(AppTheme.textPrimary)
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(api.isTelegramConfigured ? AppTheme.emerald : AppTheme.amber)
+                                    .frame(width: 7, height: 7)
+                                Text(api.telegramConnectedUsername.isEmpty
+                                     ? (api.isTelegramConfigured ? "Telegram Configured" : "Tap Key Icon to Login Telegram")
+                                     : "Connected: @\(api.telegramConnectedUsername)")
+                                    .font(.caption2)
+                                    .foregroundColor(AppTheme.textSecondary)
+                            }
+                        }
+
+                        Spacer()
+
+                        NavigationLink(destination: ApiSetupView()) {
+                            Image(systemName: "key.fill")
+                                .font(.caption.bold())
                                 .foregroundColor(AppTheme.amber)
-                            Spacer()
-                            if api.isTelegramConfigured {
-                                Text(api.telegramConnectedUsername.isEmpty ? "Configured" : "@\(api.telegramConnectedUsername)")
-                                    .font(.caption2.bold())
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(AppTheme.emerald.opacity(0.2))
-                                    .foregroundColor(AppTheme.emerald)
-                                    .clipShape(Capsule())
-                            } else {
-                                Text("Not Logged In")
-                                    .font(.caption2.bold())
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(AppTheme.danger.opacity(0.18))
-                                    .foregroundColor(AppTheme.danger)
-                                    .clipShape(Capsule())
-                            }
-                        }
-
-                        if api.hasTelegramMTProto {
-                            Text("MTProto Account: \(api.telegramPhone) (API ID: \(api.telegramApiId))")
-                                .font(.caption)
-                                .foregroundColor(AppTheme.textSecondary)
-                        }
-
-                        HStack(spacing: 10) {
-                            NavigationLink(destination: ApiSetupView()) {
-                                Label(api.isTelegramConfigured ? "Manage Telegram Login" : "Login Telegram / Import API", systemImage: "gearshape.fill")
-                                    .font(.caption.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(AppTheme.primary)
-                                    .foregroundColor(.white)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-
-                            if api.hasTelegramBot {
-                                Button {
-                                    fetchBotMediaInbox()
-                                } label: {
-                                    if isLoadingBotInbox {
-                                        ProgressView().tint(.black)
-                                    } else {
-                                        Label("Sync Bot Videos", systemImage: "arrow.clockwise")
-                                    }
-                                }
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(AppTheme.emerald)
-                                .foregroundColor(.black)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .disabled(isLoadingBotInbox)
-                            }
-                        }
-
-                        if let note = botStatusNote {
-                            Text(note)
-                                .font(.caption)
-                                .foregroundColor(AppTheme.textSecondary)
+                                .padding(9)
+                                .background(AppTheme.surfaceCardElevated)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
                         }
                     }
+
+                    Picker("Download Mode", selection: $activeTab) {
+                        ForEach(DownloadTab.allCases) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(AppTheme.surfaceCard)
+                .overlay(
+                    Rectangle().fill(AppTheme.surfaceCardBorder).frame(height: 1),
+                    alignment: .bottom
+                )
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        // Active Live Transfer Monitor (visible across all tabs while downloading)
+                        if downloader.isDownloading || downloader.savedFileURL != nil || downloader.errorMessage != nil {
+                            activeTransferCard
+                        }
+
+                        switch activeTab {
+                        case .inbox:
+                            botInboxPanel
+                        case .direct:
+                            directLinkPanel
+                        case .files:
+                            downloadedFilesPanel
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+        }
+        .navigationTitle("Downloader Studio")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            refreshDownloadedFiles()
+            if !api.hasTelegramBot {
+                activeTab = .direct
+            }
+        }
+        .onChange(of: downloader.savedFileURL) { _ in
+            refreshDownloadedFiles()
+        }
+        .sheet(item: $previewItem) { item in
+            NavigationStack {
+                VideoPlayer(player: AVPlayer(url: item.url))
+                    .ignoresSafeArea(edges: .bottom)
+                    .navigationTitle(item.url.lastPathComponent)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { previewItem = nil }
+                        }
+                    }
+            }
+            .preferredColorScheme(.dark)
+        }
+    }
+
+    // MARK: - Live Transfer Card
+    private var activeTransferCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .stroke(AppTheme.surfaceCardBorder, lineWidth: 4)
+                        .frame(width: 44, height: 44)
+                    Circle()
+                        .trim(from: 0, to: downloader.progress)
+                        .stroke(
+                            downloader.errorMessage != nil ? AppTheme.danger : AppTheme.emerald,
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 44, height: 44)
+                    Text("\(Int(downloader.progress * 100))%")
+                        .font(.caption2.bold().monospacedDigit())
+                        .foregroundColor(AppTheme.textPrimary)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(downloader.filename.isEmpty ? "Download Transfer" : downloader.filename)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .lineLimit(1)
+                    Text(downloader.errorMessage ?? downloader.percentText)
+                        .font(.caption)
+                        .foregroundColor(downloader.errorMessage != nil ? AppTheme.danger : AppTheme.textSecondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                if downloader.isDownloading {
+                    Button {
+                        downloader.cancelDownload()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(AppTheme.danger)
+                    }
+                }
+            }
+
+            if downloader.isDownloading {
+                ProgressView(value: downloader.progress)
+                    .tint(AppTheme.cyan)
+                HStack {
+                    Label("Streaming to Apple Files", systemImage: "bolt.fill")
+                        .font(.caption2)
+                        .foregroundColor(AppTheme.textMuted)
+                    Spacer()
+                    Text(downloader.speedText)
+                        .font(.caption.monospacedDigit().bold())
+                        .foregroundColor(AppTheme.emerald)
+                }
+            }
+
+            if let saved = downloader.savedFileURL, !downloader.isDownloading {
+                HStack(spacing: 10) {
+                    Button {
+                        previewItem = PreviewVideoItem(url: saved)
+                    } label: {
+                        Label("Play Preview", systemImage: "play.fill")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(AppTheme.primary.opacity(0.2))
+                            .foregroundColor(AppTheme.primaryLight)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    ShareLink(item: saved) {
+                        Label("Share / Save", systemImage: "square.and.arrow.up")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(AppTheme.emerald)
+                            .foregroundColor(.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+        .pipelineCard()
+    }
+
+    // MARK: - Tab 1: Telegram Bot Inbox
+    private var botInboxPanel: some View {
+        VStack(spacing: 14) {
+            if !api.hasTelegramBot {
+                VStack(spacing: 12) {
+                    Image(systemName: "paperplane.circle.fill")
+                        .font(.system(size: 46))
+                        .foregroundColor(AppTheme.cyan)
+                    Text("Connect Your Telegram Bot")
+                        .font(.headline)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text("Log in with your Telegram Bot Token to sync & download videos sent or forwarded to your bot straight to your iPhone.")
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                    NavigationLink(destination: ApiSetupView()) {
+                        Label("Open Telegram Login & API Setup", systemImage: "key.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(AppTheme.primary)
+                            .foregroundColor(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                .pipelineCard()
+            } else {
+                // Search & Sync Bar
+                HStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(AppTheme.textMuted)
+                        TextField("Filter by filename or caption...", text: $searchQuery)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .font(.subheadline)
+                    }
+                    .padding(10)
+                    .background(AppTheme.surfaceCardElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+
+                    Button {
+                        fetchBotMediaInbox()
+                    } label: {
+                        if isLoadingBotInbox {
+                            ProgressView().tint(.black)
+                                .frame(width: 40, height: 40)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.headline)
+                                .foregroundColor(.black)
+                                .frame(width: 40, height: 40)
+                        }
+                    }
+                    .background(AppTheme.emerald)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .disabled(isLoadingBotInbox)
+                }
+
+                if let note = botStatusNote {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if filteredBotItems.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "tray.and.arrow.down")
+                            .font(.system(size: 34))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("Tap Refresh to Sync Bot Videos")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+                        Text("Forward or send any video to @\(api.telegramConnectedUsername.isEmpty ? "your_bot" : api.telegramConnectedUsername) on Telegram, then tap Sync.")
+                            .font(.caption)
+                            .foregroundColor(AppTheme.textMuted)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 28)
                     .pipelineCard()
-
-                    // Recent Videos Sent to Telegram Bot
-                    if !botMediaItems.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Telegram Bot Video Inbox (\(botMediaItems.count))")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundColor(AppTheme.textPrimary)
-
-                            ForEach(botMediaItems) { item in
-                                HStack(spacing: 10) {
-                                    Image(systemName: "film.fill")
-                                        .foregroundColor(AppTheme.cyan)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.fileName)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundColor(AppTheme.textPrimary)
-                                            .lineLimit(1)
-                                        Text(String(format: "%.1f MB %@", Double(item.sizeBytes) / (1024 * 1024), item.caption.isEmpty ? "" : "• \(item.caption)"))
+                } else {
+                    ForEach(filteredBotItems) { item in
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(AppTheme.cyan.opacity(0.16))
+                                    .frame(width: 46, height: 46)
+                                Image(systemName: "film.fill")
+                                    .foregroundColor(AppTheme.cyan)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.fileName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(AppTheme.textPrimary)
+                                    .lineLimit(1)
+                                HStack(spacing: 6) {
+                                    Text(String(format: "%.1f MB", Double(item.sizeBytes) / (1024 * 1024)))
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2)
+                                        .background(AppTheme.primary.opacity(0.2))
+                                        .foregroundColor(AppTheme.primaryLight)
+                                        .clipShape(Capsule())
+                                    if !item.caption.isEmpty {
+                                        Text(item.caption)
                                             .font(.caption2)
                                             .foregroundColor(AppTheme.textSecondary)
                                             .lineLimit(1)
                                     }
-                                    Spacer()
-                                    Button("Download") {
-                                        downloadTelegramBotFile(item)
-                                    }
-                                    .font(.caption2.bold())
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(AppTheme.cyan)
-                                    .foregroundColor(.black)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    .disabled(downloader.isDownloading)
                                 }
-                                .padding(10)
-                                .background(AppTheme.surfaceCardElevated)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
-                        }
-                        .pipelineCard()
-                    }
-
-                    // Direct Video / Stream Link Card
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("Direct Video / Stream Link", systemImage: "paperplane.fill")
-                            .font(.headline)
-                            .foregroundColor(AppTheme.cyan)
-
-                        Text("Paste any direct video download URL. Files save to Apple Files under On My iPhone → Video Pipeline → Downloads.")
-                            .font(.caption)
-                            .foregroundColor(AppTheme.textSecondary)
-
-                        TextField("https://example.com/video.mp4", text: $urlInput)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .padding(14)
-                            .background(AppTheme.surfaceCardElevated)
-                            .foregroundColor(AppTheme.textPrimary)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(AppTheme.surfaceCardBorder, lineWidth: 1)
-                            )
-
-                        HStack(spacing: 10) {
+                            Spacer()
                             Button {
-                                downloader.startDownload(from: urlInput)
+                                downloadTelegramBotFile(item)
                             } label: {
-                                Label("Start Download", systemImage: "arrow.down.circle.fill")
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.title2)
+                                    .foregroundColor(AppTheme.emerald)
                             }
-                            .buttonStyle(PrimaryButtonStyle(color: AppTheme.cyan))
-                            .disabled(urlInput.trimmingCharacters(in: .whitespaces).isEmpty || downloader.isDownloading)
+                            .disabled(downloader.isDownloading)
+                        }
+                        .pipelineCard(cornerRadius: 14, padding: 12)
+                    }
+                }
+            }
+        }
+    }
 
-                            if downloader.isDownloading {
-                                Button {
-                                    downloader.cancelDownload()
-                                } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                        .padding(14)
-                                        .background(AppTheme.danger)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                }
+    // MARK: - Tab 2: Direct Link Stream Downloader
+    private var directLinkPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("High-Speed Direct Link", systemImage: "link.circle.fill")
+                    .font(.headline)
+                    .foregroundColor(AppTheme.cyan)
+                Spacer()
+                Button {
+                    if let clip = UIPasteboard.general.string {
+                        urlInput = clip
+                    }
+                } label: {
+                    Label("Paste", systemImage: "doc.on.clipboard")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(AppTheme.surfaceCardElevated)
+                        .foregroundColor(AppTheme.primaryLight)
+                        .clipShape(Capsule())
+                }
+            }
+
+            Text("Paste any direct video or stream download link. Saved directly into Apple Files → On My iPhone → Video Pipeline → Downloads.")
+                .font(.caption)
+                .foregroundColor(AppTheme.textSecondary)
+
+            HStack {
+                TextField("https://example.com/episode01.mp4", text: $urlInput)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundColor(AppTheme.textPrimary)
+                if !urlInput.isEmpty {
+                    Button {
+                        urlInput = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                }
+            }
+            .padding(14)
+            .background(AppTheme.surfaceCardElevated)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+
+            Button {
+                downloader.startDownload(from: urlInput)
+            } label: {
+                Label("Start High-Speed Download", systemImage: "arrow.down.to.line.circle.fill")
+            }
+            .buttonStyle(PrimaryButtonStyle(color: AppTheme.cyan))
+            .disabled(urlInput.trimmingCharacters(in: .whitespaces).isEmpty || downloader.isDownloading)
+        }
+        .pipelineCard()
+    }
+
+    // MARK: - Tab 3: Local Downloads Manager
+    private var downloadedFilesPanel: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Saved Videos (\(downloadedFiles.count))")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                Button {
+                    refreshDownloadedFiles()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(AppTheme.cyan)
+                }
+            }
+
+            if downloadedFiles.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 38))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("No Downloaded Videos Yet")
+                        .font(.headline)
+                        .foregroundColor(AppTheme.textSecondary)
+                    Text("Videos downloaded from Telegram Bot or Direct Links will appear here for instant playback & sharing.")
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textMuted)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 36)
+                .pipelineCard()
+            } else {
+                ForEach(downloadedFiles, id: \.self) { fileURL in
+                    HStack(spacing: 12) {
+                        Button {
+                            previewItem = PreviewVideoItem(url: fileURL)
+                        } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(AppTheme.primary.opacity(0.18))
+                                    .frame(width: 44, height: 44)
+                                Image(systemName: "play.fill")
+                                    .foregroundColor(AppTheme.primaryLight)
                             }
                         }
-                    }
-                    .pipelineCard()
 
-                    if downloader.isDownloading || !downloader.filename.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(downloader.filename)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(fileURL.lastPathComponent)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(AppTheme.textPrimary)
                                 .lineLimit(1)
-
-                            ProgressView(value: downloader.progress)
-                                .tint(AppTheme.cyan)
-
-                            HStack {
-                                Text(downloader.percentText)
-                                    .font(.caption)
-                                    .foregroundColor(AppTheme.textSecondary)
-                                Spacer()
-                                Text(downloader.speedText)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundColor(AppTheme.emerald)
-                            }
+                            Text(fileSizeString(for: fileURL))
+                                .font(.caption2)
+                                .foregroundColor(AppTheme.textSecondary)
                         }
-                        .pipelineCard()
-                    }
 
-                    if let err = downloader.errorMessage {
-                        Text(err)
-                            .font(.footnote)
-                            .foregroundColor(AppTheme.danger)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .pipelineCard(cornerRadius: 12, padding: 12)
-                    }
+                        Spacer()
 
-                    if let fileURL = downloader.savedFileURL {
                         ShareLink(item: fileURL) {
-                            Label("Share or Save to Photos", systemImage: "square.and.arrow.up")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(AppTheme.emerald)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.subheadline)
+                                .foregroundColor(AppTheme.emerald)
+                                .padding(8)
+                                .background(AppTheme.emerald.opacity(0.15))
+                                .clipShape(Circle())
+                        }
+
+                        Button {
+                            try? FileManager.default.removeItem(at: fileURL)
+                            refreshDownloadedFiles()
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.subheadline)
+                                .foregroundColor(AppTheme.danger)
+                                .padding(8)
+                                .background(AppTheme.danger.opacity(0.15))
+                                .clipShape(Circle())
                         }
                     }
+                    .pipelineCard(cornerRadius: 14, padding: 12)
                 }
-                .padding(16)
             }
         }
-        .navigationTitle("Telegram Downloader")
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // MARK: - Helpers
+    private func refreshDownloadedFiles() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dlDir = docs.appendingPathComponent("Downloads", isDirectory: true)
+        if let files = try? FileManager.default.contentsOfDirectory(at: dlDir, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) {
+            downloadedFiles = files.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        } else {
+            downloadedFiles = []
+        }
+    }
+
+    private func fileSizeString(for url: URL) -> String {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let mb = Double(size) / (1024 * 1024)
+        return mb >= 1.0 ? String(format: "%.1f MB", mb) : String(format: "%.0f KB", Double(size) / 1024.0)
     }
 
     private func fetchBotMediaInbox() {
@@ -389,7 +691,7 @@ struct TelegramDownloaderView: View {
                         }
                     }
                     botMediaItems = found
-                    botStatusNote = found.isEmpty ? "No recent videos in Bot inbox. Forward or send a video to your bot, then tap Sync." : "Found \(found.count) video(s) from your Telegram Bot."
+                    botStatusNote = found.isEmpty ? "No recent videos in Bot inbox. Forward a video to your bot, then tap Sync." : "Synced \(found.count) video(s) from Telegram Bot."
                 } else {
                     botStatusNote = "Could not fetch updates. Check your Bot Token in API Setup."
                 }
@@ -405,7 +707,7 @@ struct TelegramDownloaderView: View {
         guard !token.isEmpty,
               let getFileURL = URL(string: "https://api.telegram.org/bot\(token)/getFile?file_id=\(item.fileId)") else { return }
 
-        botStatusNote = "Resolving Telegram file link..."
+        botStatusNote = "Resolving Telegram file path..."
         Task {
             do {
                 let (data, _) = try await URLSession.shared.data(for: URLRequest(url: getFileURL))
@@ -417,7 +719,7 @@ struct TelegramDownloaderView: View {
                     botStatusNote = nil
                     downloader.startDownload(from: downloadURL, customFileName: item.fileName)
                 } else {
-                    let desc = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["description"] as? String ?? "Telegram Bot API supports direct file downloads up to 20 MB."
+                    let desc = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["description"] as? String ?? "Telegram Bot API supports direct downloads up to 20 MB."
                     botStatusNote = "Telegram error: \(desc)"
                 }
             } catch {

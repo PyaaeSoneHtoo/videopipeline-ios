@@ -54,9 +54,9 @@ jobs:
           fi
           cp -R "$APP_PATH" dist/Payload/
           cd dist
-          zip -r -y VideoPipelineSuite-v1.1.0-unsigned.ipa Payload
+          zip -r -y VideoPipelineSuite-v1.2.0-unsigned.ipa Payload
           rm -rf Payload
-          ls -lh VideoPipelineSuite-v1.1.0-unsigned.ipa
+          ls -lh VideoPipelineSuite-v1.2.0-unsigned.ipa
 
       - name: Upload Unsigned IPA as Workflow Artifact
         uses: actions/upload-artifact@v4
@@ -69,18 +69,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.1.0-ios
-          name: "Video Pipeline Suite for iOS v1.1.0 (Unsigned IPA)"
+          tag_name: v1.2.0-ios
+          name: "Video Pipeline Suite for iOS v1.2.0 (Unsigned IPA)"
           body: |
-            ### 🍎 Video Pipeline Suite for iOS v1.1.0 (Unsigned IPA)
+            ### 🍎 Video Pipeline Suite for iOS v1.2.0 (Unsigned IPA)
 
-            Native SwiftUI + AVFoundation mobile video automation suite compiled cleanly via GitHub Actions:
-            - 🔑 **API & Telegram Setup Wizard**: Import `.env` / `JSON` config from PC, configure & live-verify **Google Gemini API**, **DeepSeek API**, and **Telegram Bot / MTProto Login**
-            - 🔐 **Firebase Authentication & Device License Slot Binding** (`DEV-IOS-XXXX`)
-            - 🏷️ **Batch Video Renamer**: Strip Telegram message IDs (`_1234`), Fast Regex, **Gemini AI**, and **DeepSeek AI** renaming directly on iOS Files folders
-            - ✂️ **AI Ad Cutter & Lossless Intro Trimmer**: Auto-detect intro ads with **Gemini / DeepSeek Vision AI** + instant `AVAssetExportPresetPassthrough` stream-copy trimming without re-encoding
-            - 📥 **Telegram & Direct Downloader**: Telegram Bot video inbox sync (`getUpdates`/`getFile`) + direct link high-speed downloads saved to Files (`On My iPhone → Video Pipeline`)
-            - 📺 **YouTube Downloader**: Metadata lookup (title & channel) with MP4/MP3 export
+            Studio-grade UI overhaul for both **Downloader** and **Uploader**:
+            - 📥 **Downloader Studio UI**: 3-tab Studio (`Bot Inbox` with search/filter, `Direct URL` with 1-tap paste & circular+linear speed ring, and `Downloads` local library with in-app AVPlayer preview, share & delete)
+            - 📤 **NEW Uploader Studio UI**: 3-tab Studio (`Telegram Channel/Group` real multipart `sendVideo` uploader with auto-detected chats, AVFoundation thumbnail & resolution inspection, HTML caption templates & Protect Content toggle; `TikTok Studio` with hashtag chips & direct Share/Save; and `Upload Queue & History`)
+            - 📺 **Upgraded YouTube Downloader**: Live HD thumbnail preview, 1-tap paste, MP4/MP3 export cards
+            - 🔑 **API & Telegram Setup**: `.env` / JSON import, Gemini & DeepSeek API keys with live verification, Telegram Bot & MTProto login
+            - ✂️ **AI Ad Cutter & Lossless Trimmer**: Gemini/DeepSeek Vision intro ad scan + lossless `AVAssetExportPresetPassthrough` cutting
 
             #### 📲 How to Install (Unsigned IPA):
             Install using **TrollStore**, **AltStore**, **SideStore**, **Sideloadly**, **ESign**, **Scarlet**, or **Feather**.
