@@ -82,13 +82,13 @@ final class TelegramMTProtoManager: ObservableObject {
 
     private var activeDownloadFileId: Int? = nil
     private var activeDownloadTargetName: String = ""
-    private var downloadStartTime: Date = Date()
+    private var downloadStartTime: Foundation.Date = Foundation.Date()
 
     private var activeUploadFileId: Int? = nil
     private var activeUploadMessageId: Int64? = nil
     private var activeUploadFileName: String = ""
     private var activeUploadTargetTitle: String = ""
-    private var uploadStartTime: Date = Date()
+    private var uploadStartTime: Foundation.Date = Foundation.Date()
 
     private init() {
         // Auto-reconnect silently if API ID & Hash were saved previously
@@ -321,7 +321,7 @@ final class TelegramMTProtoManager: ObservableObject {
         downloadSpeedText = ""
         activeDownloadFileId = item.fileId
         activeDownloadTargetName = item.fileName
-        downloadStartTime = Date()
+        downloadStartTime = Foundation.Date()
 
         Task {
             do {
@@ -378,7 +378,7 @@ final class TelegramMTProtoManager: ObservableObject {
         uploadSpeedText = ""
         uploadError = nil
         uploadSuccess = nil
-        uploadStartTime = Date()
+        uploadStartTime = Foundation.Date()
         activeUploadFileName = videoURL.lastPathComponent
         activeUploadTargetTitle = targetTitle
 
@@ -573,7 +573,7 @@ final class TelegramMTProtoManager: ObservableObject {
             let total = max(file.size, file.expectedSize, 1)
             let downloaded = file.local.downloadedSize
             let pct = min(1.0, max(0.0, Double(downloaded) / Double(total)))
-            let elapsed = max(0.1, Date().timeIntervalSince(downloadStartTime))
+            let elapsed = max(0.1, Foundation.Date().timeIntervalSince(downloadStartTime))
             let speedKBps = (Double(downloaded) / 1024.0) / elapsed
 
             self.downloadProgress = pct
@@ -614,7 +614,7 @@ final class TelegramMTProtoManager: ObservableObject {
             let total = max(file.size, file.expectedSize, 1)
             let uploaded = file.remote.uploadedSize
             let pct = min(1.0, max(0.0, Double(uploaded) / Double(total)))
-            let elapsed = max(0.1, Date().timeIntervalSince(uploadStartTime))
+            let elapsed = max(0.1, Foundation.Date().timeIntervalSince(uploadStartTime))
             let speedKBps = (Double(uploaded) / 1024.0) / elapsed
 
             self.uploadProgress = pct

@@ -13,12 +13,18 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         // Top Brand & Settings Header
-                        HStack {
+                        HStack(spacing: 10) {
+                            Image("AppLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Video Pipeline Suite")
-                                    .font(.title2.bold())
+                                    .font(.title3.bold())
                                     .foregroundColor(AppTheme.textPrimary)
-                                Text("iOS MTProto Studio • v1.3.0")
+                                Text("iOS MTProto Studio • v1.3.1")
                                     .font(.caption)
                                     .foregroundColor(AppTheme.textSecondary)
                             }

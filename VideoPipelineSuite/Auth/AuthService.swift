@@ -91,23 +91,58 @@ enum AuthService {
                 }
             }
 
-            // 4. iOS Device Authorization (1 iOS Device Limit)
+            // 4. Plan-Based iOS Eligibility Check (Personal 1 PC = No iOS; Team 2 PCs & Business 3 PCs = 1 iOS Included)
+            var maxDevices = 1
+            var explicitMaxIos: Int? = nil
             var boundIosId: String? = nil
 
             if !customClaimsStr.isEmpty,
                let claimsData = customClaimsStr.data(using: .utf8),
-               let claimsJSON = try? JSONSerialization.jsonObject(with: claimsData) as? [String: Any],
-               let d = claimsJSON["ios_device_id"] as? String {
-                let trimmed = d.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty && trimmed.lowercased() != "unbound" && trimmed.lowercased() != "null" {
-                    boundIosId = trimmed
+               let claimsJSON = try? JSONSerialization.jsonObject(with: claimsData) as? [String: Any] {
+                if let md = claimsJSON["max_devices"] as? Int {
+                    maxDevices = md
+                } else if let mdNum = claimsJSON["max_devices"] as? NSNumber {
+                    maxDevices = mdNum.intValue
                 }
+                if let mi = claimsJSON["max_ios_devices"] as? Int {
+                    explicitMaxIos = mi
+                } else if let miNum = claimsJSON["max_ios_devices"] as? NSNumber {
+                    explicitMaxIos = miNum.intValue
+                }
+                if let d = claimsJSON["ios_device_id"] as? String {
+                    let trimmed = d.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty && trimmed.lowercased() != "unbound" && trimmed.lowercased() != "null" && trimmed.lowercased() != "disabled" {
+                        boundIosId = trimmed
+                    }
+                }
+            }
+
+            if let mdMatch = firstMatch(pattern: "(?:maxdev|max_dev|max_devices)[:=\\s]*([1-3])", in: rawDisplayName),
+               let parsedMd = Int(mdMatch) {
+                maxDevices = parsedMd
+            }
+
+            let iosDisabledInDisplay = rawDisplayName.range(of: "ios:DISABLED", options: .caseInsensitive) != nil
+                || rawDisplayName.range(of: "ios:NONE", options: .caseInsensitive) != nil
+
+            let isIosAllowed: Bool
+            if let explicit = explicitMaxIos {
+                isIosAllowed = explicit >= 1 && !iosDisabledInDisplay
+            } else {
+                isIosAllowed = maxDevices >= 2 && !iosDisabledInDisplay
+            }
+
+            if !isIosAllowed {
+                return AuthResult(
+                    success: false,
+                    errorMessage: "iOS App Not Included in Personal Plan: Your current Personal (1 PC) license includes 1 PC + 1 Android device only. Upgrade to a Team (2 PCs) or Business (3 PCs) plan to unlock the iOS App."
+                )
             }
 
             if boundIosId == nil,
                let match = firstMatch(pattern: "(?:ios|ios_dev|ios_id)[:=\\s]*([a-zA-Z0-9_\\-]+)", in: rawDisplayName) {
                 let trimmed = match.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty && trimmed.lowercased() != "unbound" && trimmed.lowercased() != "null" && trimmed != "1" {
+                if !trimmed.isEmpty && trimmed.lowercased() != "unbound" && trimmed.lowercased() != "null" && trimmed.lowercased() != "disabled" && trimmed != "1" {
                     boundIosId = trimmed
                 }
             }
@@ -119,7 +154,7 @@ enum AuthService {
                 if boundClean != currentClean {
                     return AuthResult(
                         success: false,
-                        errorMessage: "iOS Device Limit Exceeded: This account is already bound to another iOS device (\(boundClean)). Only 1 iOS device is accepted per license. Please contact administrator to reset your device slot."
+                        errorMessage: "iOS Device Limit Exceeded: This account is already bound to another iOS device (\(boundClean)). Only 1 iOS device is accepted per Team/Business license. Please contact administrator to reset your device slot."
                     )
                 }
             } else {
@@ -135,7 +170,7 @@ enum AuthService {
                     updatedDisplayName = "\(rawDisplayName) | ios:\(currentClean)"
                 } else {
                     let prefix = userEmail.components(separatedBy: "@").first ?? "user"
-                    updatedDisplayName = "\(prefix) | expire:\(expiresAt) | ios:\(currentClean)"
+                    updatedDisplayName = "\(prefix) | expire:\(expiresAt) | maxdev:\(maxDevices) | ios:\(currentClean)"
                 }
 
                 let updatePayload: [String: Any] = [
@@ -147,13 +182,17 @@ enum AuthService {
                 boundIosId = currentClean
             }
 
+            let planLabel = maxDevices >= 3
+                ? "Business Plan (3 PCs + 1 Android + 1 iOS)"
+                : "Team Plan (2 PCs + 1 Android + 1 iOS)"
+
             return AuthResult(
                 success: true,
                 token: idToken,
                 uid: localId,
                 email: userEmail,
                 expiresAt: expiresAt,
-                plan: "VIP License (iOS Mobile)",
+                plan: planLabel,
                 boundDeviceId: boundIosId ?? currentClean
             )
         } catch {

@@ -19,26 +19,25 @@ struct LoginView: View {
 
                     // Logo & Header
                     VStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 22)
-                                .fill(AppTheme.primary.opacity(0.16))
-                                .frame(width: 82, height: 82)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 22)
-                                        .stroke(AppTheme.primary.opacity(0.5), lineWidth: 1.5)
-                                )
-                            Image(systemName: "play.rectangle.fill")
-                                .font(.system(size: 38))
-                                .foregroundColor(AppTheme.primaryLight)
-                        }
+                        Image("AppLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 88, height: 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 22)
+                                    .stroke(AppTheme.primary.opacity(0.55), lineWidth: 1.5)
+                            )
+                            .shadow(color: AppTheme.primary.opacity(0.35), radius: 14, x: 0, y: 6)
 
                         Text("Video Pipeline Suite")
                             .font(.title.bold())
                             .foregroundColor(AppTheme.textPrimary)
 
-                        Text("iOS Mobile Automation Studio")
-                            .font(.subheadline)
+                        Text("iOS MTProto Automation Studio • Team & Business Plans")
+                            .font(.caption)
                             .foregroundColor(AppTheme.textSecondary)
+                            .multilineTextAlignment(.center)
                     }
 
                     // Login Form Card
