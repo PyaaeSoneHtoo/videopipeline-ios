@@ -46,6 +46,7 @@ final class TelegramMTProtoManager: ObservableObject {
     @Published var authStage: MTProtoAuthStage = .disconnected
     @Published var authMessage: String? = nil
     @Published var authError: String? = nil
+    @Published var isBusyAuth: Bool = false
     @Published var connectedUserName: String = ""
     @Published var connectedPhone: String = ""
 
@@ -75,10 +76,12 @@ final class TelegramMTProtoManager: ObservableObject {
 
     var isAuthorized: Bool { authStage == .ready }
 
-    private var clientManager: TDLibClientManager?
+    private let clientManager = TDLibClientManager()
     private var client: TDLibClient?
     private var currentApiId: Int = 0
     private var currentApiHash: String = ""
+    private var pendingPhoneNumberToSend: String? = nil
+    private var isSendingParameters: Bool = false
 
     private var activeDownloadFileId: Int? = nil
     private var activeDownloadTargetName: String = ""
@@ -98,37 +101,105 @@ final class TelegramMTProtoManager: ObservableObject {
         }
     }
 
-    // MARK: - Start & Connect MTProto Client
+    // MARK: - Start & Connect MTProto Client (Silent Auto-Reconnect)
     func startClient(apiIdString: String, apiHash: String) {
+        let cleanIdStr = apiIdString.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanHash = apiHash.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsedId = Int(apiIdString.trimmingCharacters(in: .whitespacesAndNewlines)), parsedId > 0, !cleanHash.isEmpty else {
+        guard let parsedId = Int(cleanIdStr), parsedId > 0, !cleanHash.isEmpty else {
             authError = "Please enter a valid numeric API ID and API Hash from my.telegram.org."
+            isBusyAuth = false
             return
         }
 
+        let credentialsChanged = (currentApiId != 0 && (currentApiId != parsedId || currentApiHash != cleanHash))
         currentApiId = parsedId
         currentApiHash = cleanHash
         authError = nil
         authMessage = "Connecting to Telegram MTProto..."
 
-        if client != nil {
+        if let existing = client, !credentialsChanged {
             if authStage == .disconnected {
                 authStage = .connecting
+            }
+            Task {
+                if let state = try? await existing.getAuthorizationState() {
+                    self.handleAuthState(state)
+                }
             }
             return
         }
 
+        if let oldClient = client {
+            client = nil
+            isSendingParameters = false
+            Task { _ = try? await oldClient.close() }
+        }
+
         authStage = .connecting
-        let mgr = TDLibClientManager()
-        self.clientManager = mgr
-        self.client = mgr.createClient { [weak self] data, _ in
+        isSendingParameters = false
+        let td = clientManager.createClient { [weak self] data, tdClient in
             guard let self = self else { return }
-            if let update = try? JSONDecoder().decode(Update.self, from: data) {
+            if let update = try? tdClient.decoder.decode(Update.self, from: data) {
                 Task { @MainActor in
                     self.handleUpdate(update)
                 }
             }
         }
+        self.client = td
+
+        Task {
+            if let state = try? await td.getAuthorizationState() {
+                self.handleAuthState(state)
+            }
+        }
+    }
+
+    // MARK: - All-in-One: Connect MTProto & Send OTP Code in 1 Tap
+    func connectAndSendPhone(phone: String, apiIdString: String, apiHash: String) {
+        let cleanPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanIdStr = apiIdString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanHash = apiHash.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleanPhone.isEmpty else {
+            authError = "Enter your Telegram mobile number with country code (e.g. +959... or +1...)."
+            return
+        }
+        guard let parsedId = Int(cleanIdStr), parsedId > 0, !cleanHash.isEmpty else {
+            authError = "Enter your numeric Telegram API ID and API Hash from my.telegram.org."
+            return
+        }
+
+        ApiSettingsStore.shared.telegramPhone = cleanPhone
+        ApiSettingsStore.shared.telegramApiId = cleanIdStr
+        ApiSettingsStore.shared.telegramApiHash = cleanHash
+
+        authError = nil
+        isBusyAuth = true
+
+        let credentialsChanged = (currentApiId != 0 && (currentApiId != parsedId || currentApiHash != cleanHash))
+
+        // If already waiting for phone number with the same API credentials, submit immediately
+        if client != nil, !credentialsChanged, authStage == .waitPhoneNumber {
+            submitPhoneNumber(cleanPhone)
+            return
+        }
+
+        // Queue phone number and spin up / reconnect TDLib client
+        pendingPhoneNumberToSend = cleanPhone
+        startClient(apiIdString: cleanIdStr, apiHash: cleanHash)
+    }
+
+    func resetAuthFlow() {
+        pendingPhoneNumberToSend = nil
+        isBusyAuth = false
+        authError = nil
+        authMessage = nil
+        if let oldClient = client {
+            client = nil
+            isSendingParameters = false
+            Task { _ = try? await oldClient.close() }
+        }
+        authStage = .disconnected
     }
 
     // MARK: - Auth Actions
@@ -136,13 +207,16 @@ final class TelegramMTProtoManager: ObservableObject {
         let cleaned = phone.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else {
             authError = "Enter your phone number with country code (e.g. +959...)."
+            isBusyAuth = false
             return
         }
         guard let td = client else {
-            authError = "Tap Connect MTProto first."
+            authError = "Telegram client not connected yet."
+            isBusyAuth = false
             return
         }
         authError = nil
+        isBusyAuth = true
         authMessage = "Sending OTP code to \(cleaned)..."
         ApiSettingsStore.shared.telegramPhone = cleaned
 
@@ -150,6 +224,7 @@ final class TelegramMTProtoManager: ObservableObject {
             do {
                 _ = try await td.setAuthenticationPhoneNumber(phoneNumber: cleaned, settings: nil)
             } catch {
+                self.isBusyAuth = false
                 self.authError = "Phone error: \(error.localizedDescription)"
             }
         }
@@ -163,12 +238,14 @@ final class TelegramMTProtoManager: ObservableObject {
         }
         guard let td = client else { return }
         authError = nil
+        isBusyAuth = true
         authMessage = "Verifying OTP code..."
 
         Task {
             do {
                 _ = try await td.checkAuthenticationCode(code: cleaned)
             } catch {
+                self.isBusyAuth = false
                 self.authError = "OTP error: \(error.localizedDescription)"
             }
         }
@@ -181,18 +258,22 @@ final class TelegramMTProtoManager: ObservableObject {
         }
         guard let td = client else { return }
         authError = nil
+        isBusyAuth = true
         authMessage = "Verifying 2FA password..."
 
         Task {
             do {
                 _ = try await td.checkAuthenticationPassword(password: password)
             } catch {
+                self.isBusyAuth = false
                 self.authError = "2FA error: \(error.localizedDescription)"
             }
         }
     }
 
     func logout() {
+        pendingPhoneNumberToSend = nil
+        isBusyAuth = false
         guard let td = client else {
             authStage = .disconnected
             return
@@ -501,20 +582,36 @@ final class TelegramMTProtoManager: ObservableObject {
         case .authorizationStateWaitTdlibParameters:
             sendTdlibParameters()
         case .authorizationStateWaitPhoneNumber:
+            isSendingParameters = false
             authStage = .waitPhoneNumber
-            authMessage = "Enter your Telegram phone number to receive an OTP code."
+            if let pending = pendingPhoneNumberToSend {
+                pendingPhoneNumberToSend = nil
+                submitPhoneNumber(pending)
+            } else {
+                isBusyAuth = false
+                authMessage = "Ready! Enter your mobile number and tap Send OTP Verification Code."
+            }
         case .authorizationStateWaitCode:
+            isSendingParameters = false
+            isBusyAuth = false
             authStage = .waitCode
             authMessage = "OTP code sent! Check your Telegram app or SMS."
         case .authorizationStateWaitPassword(let pwdState):
+            isSendingParameters = false
+            isBusyAuth = false
             authStage = .waitPassword(hint: pwdState.passwordHint)
             authMessage = "Enter your Telegram 2FA Cloud Password."
         case .authorizationStateReady:
+            isSendingParameters = false
+            isBusyAuth = false
+            pendingPhoneNumberToSend = nil
             authStage = .ready
             authError = nil
             authMessage = "Connected via Telegram MTProto!"
             fetchCurrentUserAndChats()
         case .authorizationStateClosed:
+            isSendingParameters = false
+            isBusyAuth = false
             client = nil
             authStage = .disconnected
         default:
@@ -523,7 +620,8 @@ final class TelegramMTProtoManager: ObservableObject {
     }
 
     private func sendTdlibParameters() {
-        guard let td = client else { return }
+        guard let td = client, !isSendingParameters else { return }
+        isSendingParameters = true
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dbDir = appSupport.appendingPathComponent("tdlib_db", isDirectory: true)
         let filesDir = appSupport.appendingPathComponent("tdlib_files", isDirectory: true)
@@ -535,7 +633,7 @@ final class TelegramMTProtoManager: ObservableObject {
                 _ = try await td.setTdlibParameters(
                     apiHash: currentApiHash,
                     apiId: currentApiId,
-                    applicationVersion: "1.3.0",
+                    applicationVersion: "1.3.2",
                     databaseDirectory: dbDir.path,
                     databaseEncryptionKey: Data(),
                     deviceModel: UIDevice.current.model,
@@ -549,6 +647,9 @@ final class TelegramMTProtoManager: ObservableObject {
                     useTestDc: false
                 )
             } catch {
+                self.isSendingParameters = false
+                self.isBusyAuth = false
+                self.pendingPhoneNumberToSend = nil
                 self.authError = "TDLib init error: \(error.localizedDescription)"
                 self.authStage = .disconnected
             }

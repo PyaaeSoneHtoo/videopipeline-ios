@@ -321,64 +321,87 @@ struct ApiSetupView: View {
                     }
                 }
 
-            case .disconnected, .connecting:
-                HStack {
-                    Text("Step 1: Enter API ID & API Hash")
+            case .disconnected, .connecting, .waitPhoneNumber:
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Mobile Number (with Country Code)")
                         .font(.caption.weight(.semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                    Spacer()
-                    Link("Get at my.telegram.org →", destination: URL(string: "https://my.telegram.org/apps")!)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundColor(AppTheme.cyan)
+                        .foregroundColor(AppTheme.emerald)
+
+                    styledTextField("+959xxxxxxxxx (e.g. +1..., +95...)", text: $api.telegramPhone, keyboard: .phonePad)
+
+                    HStack {
+                        Text("Telegram API ID & API Hash")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Spacer()
+                        Link("Get at my.telegram.org →", destination: URL(string: "https://my.telegram.org/apps")!)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(AppTheme.cyan)
+                    }
+                    .padding(.top, 4)
+
+                    styledTextField("Telegram API ID (e.g. 12345678)", text: $api.telegramApiId, keyboard: .numberPad)
+                    styledTextField("Telegram API Hash (32-char hex)", text: $api.telegramApiHash, keyboard: .asciiCapable)
                 }
 
-                styledTextField("Telegram API ID (e.g. 12345678)", text: $api.telegramApiId, keyboard: .numberPad)
-                styledTextField("Telegram API Hash (32-char hex)", text: $api.telegramApiHash, keyboard: .asciiCapable)
-
                 Button {
-                    mtproto.startClient(apiIdString: api.telegramApiId, apiHash: api.telegramApiHash)
+                    mtproto.connectAndSendPhone(
+                        phone: api.telegramPhone,
+                        apiIdString: api.telegramApiId,
+                        apiHash: api.telegramApiHash
+                    )
                 } label: {
-                    if mtproto.authStage == .connecting {
+                    if mtproto.isBusyAuth {
                         HStack(spacing: 8) {
                             ProgressView().tint(.white)
-                            Text("Connecting to MTProto...")
+                            Text("Connecting & Sending OTP...")
                         }
                     } else {
-                        Label("Connect MTProto", systemImage: "bolt.horizontal.fill")
+                        Label("Send OTP Verification Code", systemImage: "paperplane.fill")
                     }
                 }
-                .buttonStyle(PrimaryButtonStyle(color: AppTheme.cyan))
-
-            case .waitPhoneNumber:
-                Text("Step 2: Enter Your Telegram Phone Number")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(AppTheme.emerald)
-
-                styledTextField("+959xxxxxxxxx", text: $api.telegramPhone, keyboard: .phonePad)
-
-                Button {
-                    mtproto.submitPhoneNumber(api.telegramPhone)
-                } label: {
-                    Label("Send OTP Verification Code", systemImage: "paperplane.fill")
-                }
                 .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+                .disabled(mtproto.isBusyAuth)
 
             case .waitCode:
-                Text("Step 3: Enter 5-Digit OTP Code from Telegram")
+                Text("Enter 5-Digit OTP Code from Telegram")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(AppTheme.amber)
+
+                Text("Verification code sent to \(api.telegramPhone). Check your Telegram app messages.")
+                    .font(.caption2)
+                    .foregroundColor(AppTheme.textSecondary)
 
                 styledTextField("12345", text: $otpCodeInput, keyboard: .numberPad)
 
                 Button {
                     mtproto.submitAuthCode(otpCodeInput)
                 } label: {
-                    Label("Verify OTP & Sign In", systemImage: "checkmark.circle.fill")
+                    if mtproto.isBusyAuth {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Verifying OTP...")
+                        }
+                    } else {
+                        Label("Verify OTP & Sign In", systemImage: "checkmark.circle.fill")
+                    }
                 }
                 .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+                .disabled(mtproto.isBusyAuth)
+
+                Button {
+                    otpCodeInput = ""
+                    mtproto.resetAuthFlow()
+                } label: {
+                    Text("Change Phone Number or API Keys")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
 
             case .waitPassword(let hint):
-                Text("Step 4: Two-Step Verification Password\(hint.isEmpty ? "" : " (Hint: \(hint))")")
+                Text("Two-Step Verification Password\(hint.isEmpty ? "" : " (Hint: \(hint))")")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(AppTheme.amber)
 
@@ -392,9 +415,28 @@ struct ApiSetupView: View {
                 Button {
                     mtproto.submitTwoFactorPassword(twoFactorPasswordInput)
                 } label: {
-                    Label("Unlock & Sign In", systemImage: "lock.open.fill")
+                    if mtproto.isBusyAuth {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Unlocking Account...")
+                        }
+                    } else {
+                        Label("Unlock & Sign In", systemImage: "lock.open.fill")
+                    }
                 }
                 .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+                .disabled(mtproto.isBusyAuth)
+
+                Button {
+                    twoFactorPasswordInput = ""
+                    mtproto.resetAuthFlow()
+                } label: {
+                    Text("Back to Login Form")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
             }
 
             if let msg = mtproto.authMessage, mtproto.authError == nil {

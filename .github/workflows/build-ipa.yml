@@ -61,9 +61,9 @@ jobs:
           fi
           cp -R "$APP_PATH" dist/Payload/
           cd dist
-          zip -r -y VideoPipelineSuite-v1.3.1-unsigned.ipa Payload
+          zip -r -y VideoPipelineSuite-v1.3.2-unsigned.ipa Payload
           rm -rf Payload
-          ls -lh VideoPipelineSuite-v1.3.1-unsigned.ipa
+          ls -lh VideoPipelineSuite-v1.3.2-unsigned.ipa
 
       - name: Upload Unsigned IPA as Workflow Artifact
         uses: actions/upload-artifact@v4
@@ -76,13 +76,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.3.1-ios
-          name: "Video Pipeline Suite for iOS v1.3.1 (MTProto Unsigned IPA)"
+          tag_name: v1.3.2-ios
+          name: "Video Pipeline Suite for iOS v1.3.2 (MTProto Unsigned IPA)"
           body: |
-            ### 🍎 Video Pipeline Suite for iOS v1.3.1 (Native MTProto TDLib)
+            ### 🍎 Video Pipeline Suite for iOS v1.3.2 (Native MTProto TDLib)
 
             Official **Video Pipeline Suite** logo + full personal **Telegram MTProto** engine (**Team & Business Plans**):
-            - ✈️ **Native Telegram MTProto Login**: Sign in directly with your **API ID, API Hash, Phone Number, OTP Code & 2FA Password** (no Bot Token required!)
+            - 📱 **All-in-One Telegram MTProto Login**: Enter your **Mobile Phone Number** (`+959...` / `+1...`), **API ID**, and **API Hash** directly on the same screen — tap **"Send OTP Verification Code"** for seamless 1-tap authentication!
             - 🔓 **Download Restricted Channel Videos**: Browse all your joined Telegram channels & groups — including **Save/Forward-Restricted** channels — or paste any `t.me/...` post link to download up to **2 GB+** original-quality videos straight to iOS Files
             - 📤 **MTProto Uploader Studio (Up to 2 GB)**: Upload videos directly to your Telegram channels/groups with AVFoundation thumbnails, caption templates, Protect Content toggle, live progress & TikTok Studio
             - 🔑 **API Setup & `.env` Import**: Configure & verify **Google Gemini** and **DeepSeek** API keys or import `.env`/JSON from PC
