@@ -2,20 +2,12 @@ import SwiftUI
 import AVKit
 import UIKit
 
-struct TelegramBotMediaItem: Identifiable {
-    let id: String
-    let fileId: String
-    let fileName: String
-    let caption: String
-    let sizeBytes: Int64
-}
-
 struct PreviewVideoItem: Identifiable {
     let id = UUID()
     let url: URL
 }
 
-final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
+final class DirectLinkDownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var isDownloading: Bool = false
     @Published var progress: Double = 0
     @Published var filename: String = ""
@@ -29,22 +21,16 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
     private var session: URLSession?
     private var currentTask: URLSessionDownloadTask?
 
-    func startDownload(from urlString: String, customFileName: String? = nil) {
+    func startDownload(from urlString: String) {
         guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             errorMessage = "Please enter a valid HTTP/HTTPS link."
             return
         }
 
-        if let custom = customFileName, !custom.isEmpty {
-            targetFileName = custom
-        } else {
-            let lastSeg = url.lastPathComponent
-            if !lastSeg.isEmpty && lastSeg.contains(".") {
-                targetFileName = lastSeg
-            } else {
-                targetFileName = "telegram_video_\(Int(Date().timeIntervalSince1970)).mp4"
-            }
-        }
+        let lastSeg = url.lastPathComponent
+        targetFileName = (!lastSeg.isEmpty && lastSeg.contains("."))
+            ? lastSeg
+            : "video_\(Int(Date().timeIntervalSince1970)).mp4"
 
         filename = targetFileName
         isDownloading = true
@@ -75,13 +61,7 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
         speedText = "Cancelled"
     }
 
-    func urlSession(
-        _ session: URLSession,
-        downloadTask: URLSessionDownloadTask,
-        didWriteData bytesWritten: Int64,
-        totalBytesWritten: Int64,
-        totalBytesExpectedToWrite: Int64
-    ) {
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         let elapsed = max(0.1, Date().timeIntervalSince(startTime))
         let speedKBps = (Double(totalBytesWritten) / 1024.0) / elapsed
         let writtenMB = Double(totalBytesWritten) / (1024.0 * 1024.0)
@@ -108,7 +88,6 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
 
         let destURL = downloadsDir.appendingPathComponent(targetFileName)
         try? FileManager.default.removeItem(at: destURL)
-
         do {
             try FileManager.default.moveItem(at: location, to: destURL)
             Task { @MainActor in
@@ -126,7 +105,7 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Swift.Error?) {
         if let error = error {
             Task { @MainActor in
                 self.isDownloading = false
@@ -138,32 +117,40 @@ final class StreamingDownloadManager: NSObject, ObservableObject, URLSessionDown
 
 struct TelegramDownloaderView: View {
     private enum DownloadTab: String, CaseIterable, Identifiable {
-        case inbox = "Bot Inbox"
-        case direct = "Direct URL"
+        case channels = "Channels"
+        case link = "Post / Link"
         case files = "Downloads"
         var id: String { rawValue }
     }
 
-    @ObservedObject private var api = ApiSettingsStore.shared
-    @StateObject private var downloader = StreamingDownloadManager()
+    @ObservedObject private var mtproto = TelegramMTProtoManager.shared
+    @StateObject private var directDownloader = DirectLinkDownloadManager()
 
-    @State private var activeTab: DownloadTab = .inbox
-    @State private var urlInput: String = ""
-    @State private var searchQuery: String = ""
-
-    @State private var botMediaItems: [TelegramBotMediaItem] = []
-    @State private var isLoadingBotInbox: Bool = false
-    @State private var botStatusNote: String? = nil
+    @State private var activeTab: DownloadTab = .channels
+    @State private var selectedChat: MTProtoChatItem? = nil
+    @State private var channelSearch: String = ""
+    @State private var videoSearch: String = ""
+    @State private var linkInput: String = ""
 
     @State private var downloadedFiles: [URL] = []
     @State private var previewItem: PreviewVideoItem? = nil
 
-    private var filteredBotItems: [TelegramBotMediaItem] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return botMediaItems }
-        return botMediaItems.filter {
+    private var filteredChats: [MTProtoChatItem] {
+        let q = channelSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return mtproto.chats }
+        return mtproto.chats.filter { $0.title.lowercased().contains(q) }
+    }
+
+    private var filteredVideos: [MTProtoVideoMessage] {
+        let q = videoSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return mtproto.channelVideos }
+        return mtproto.channelVideos.filter {
             $0.fileName.lowercased().contains(q) || $0.caption.lowercased().contains(q)
         }
+    }
+
+    private var isAnyDownloadActive: Bool {
+        mtproto.isDownloading || directDownloader.isDownloading
     }
 
     var body: some View {
@@ -184,18 +171,19 @@ struct TelegramDownloaderView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Downloader Studio")
+                            Text("MTProto Downloader")
                                 .font(.headline)
                                 .foregroundColor(AppTheme.textPrimary)
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(api.isTelegramConfigured ? AppTheme.emerald : AppTheme.amber)
+                                    .fill(mtproto.isAuthorized ? AppTheme.emerald : AppTheme.amber)
                                     .frame(width: 7, height: 7)
-                                Text(api.telegramConnectedUsername.isEmpty
-                                     ? (api.isTelegramConfigured ? "Telegram Configured" : "Tap Key Icon to Login Telegram")
-                                     : "Connected: @\(api.telegramConnectedUsername)")
+                                Text(mtproto.isAuthorized
+                                     ? "Connected: \(mtproto.connectedUserName)"
+                                     : "Tap Key Icon to Login Telegram MTProto")
                                     .font(.caption2)
                                     .foregroundColor(AppTheme.textSecondary)
+                                    .lineLimit(1)
                             }
                         }
 
@@ -229,16 +217,38 @@ struct TelegramDownloaderView: View {
 
                 ScrollView {
                     VStack(spacing: 16) {
-                        // Active Live Transfer Monitor (visible across all tabs while downloading)
-                        if downloader.isDownloading || downloader.savedFileURL != nil || downloader.errorMessage != nil {
-                            activeTransferCard
+                        // Active MTProto or Direct Transfer Monitor
+                        if mtproto.isDownloading || mtproto.lastDownloadedURL != nil || mtproto.downloadError != nil {
+                            transferCard(
+                                filename: mtproto.downloadFileName,
+                                progress: mtproto.downloadProgress,
+                                detail: mtproto.downloadError ?? mtproto.downloadDetailText,
+                                speed: mtproto.downloadSpeedText,
+                                isDownloading: mtproto.isDownloading,
+                                isError: mtproto.downloadError != nil,
+                                savedURL: mtproto.lastDownloadedURL,
+                                onCancel: { mtproto.cancelActiveDownload() }
+                            )
+                        }
+
+                        if directDownloader.isDownloading || directDownloader.savedFileURL != nil || directDownloader.errorMessage != nil {
+                            transferCard(
+                                filename: directDownloader.filename,
+                                progress: directDownloader.progress,
+                                detail: directDownloader.errorMessage ?? directDownloader.percentText,
+                                speed: directDownloader.speedText,
+                                isDownloading: directDownloader.isDownloading,
+                                isError: directDownloader.errorMessage != nil,
+                                savedURL: directDownloader.savedFileURL,
+                                onCancel: { directDownloader.cancelDownload() }
+                            )
                         }
 
                         switch activeTab {
-                        case .inbox:
-                            botInboxPanel
-                        case .direct:
-                            directLinkPanel
+                        case .channels:
+                            channelsPanel
+                        case .link:
+                            postAndDirectLinkPanel
                         case .files:
                             downloadedFilesPanel
                         }
@@ -251,11 +261,14 @@ struct TelegramDownloaderView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             refreshDownloadedFiles()
-            if !api.hasTelegramBot {
-                activeTab = .direct
+            if mtproto.isAuthorized && mtproto.chats.isEmpty {
+                mtproto.loadUserChats()
             }
         }
-        .onChange(of: downloader.savedFileURL) { _ in
+        .onChange(of: mtproto.lastDownloadedURL) { _ in
+            refreshDownloadedFiles()
+        }
+        .onChange(of: directDownloader.savedFileURL) { _ in
             refreshDownloadedFiles()
         }
         .sheet(item: $previewItem) { item in
@@ -274,8 +287,17 @@ struct TelegramDownloaderView: View {
         }
     }
 
-    // MARK: - Live Transfer Card
-    private var activeTransferCard: some View {
+    // MARK: - Transfer Progress Card
+    private func transferCard(
+        filename: String,
+        progress: Double,
+        detail: String,
+        speed: String,
+        isDownloading: Bool,
+        isError: Bool,
+        savedURL: URL?,
+        onCancel: @escaping () -> Void
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 ZStack {
@@ -283,35 +305,30 @@ struct TelegramDownloaderView: View {
                         .stroke(AppTheme.surfaceCardBorder, lineWidth: 4)
                         .frame(width: 44, height: 44)
                     Circle()
-                        .trim(from: 0, to: downloader.progress)
-                        .stroke(
-                            downloader.errorMessage != nil ? AppTheme.danger : AppTheme.emerald,
-                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
-                        )
+                        .trim(from: 0, to: progress)
+                        .stroke(isError ? AppTheme.danger : AppTheme.emerald, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .frame(width: 44, height: 44)
-                    Text("\(Int(downloader.progress * 100))%")
+                    Text("\(Int(progress * 100))%")
                         .font(.caption2.bold().monospacedDigit())
                         .foregroundColor(AppTheme.textPrimary)
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(downloader.filename.isEmpty ? "Download Transfer" : downloader.filename)
+                    Text(filename.isEmpty ? "MTProto Transfer" : filename)
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(AppTheme.textPrimary)
                         .lineLimit(1)
-                    Text(downloader.errorMessage ?? downloader.percentText)
+                    Text(detail)
                         .font(.caption)
-                        .foregroundColor(downloader.errorMessage != nil ? AppTheme.danger : AppTheme.textSecondary)
+                        .foregroundColor(isError ? AppTheme.danger : AppTheme.textSecondary)
                         .lineLimit(2)
                 }
 
                 Spacer()
 
-                if downloader.isDownloading {
-                    Button {
-                        downloader.cancelDownload()
-                    } label: {
+                if isDownloading {
+                    Button(action: onCancel) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title2)
                             .foregroundColor(AppTheme.danger)
@@ -319,21 +336,21 @@ struct TelegramDownloaderView: View {
                 }
             }
 
-            if downloader.isDownloading {
-                ProgressView(value: downloader.progress)
+            if isDownloading {
+                ProgressView(value: progress)
                     .tint(AppTheme.cyan)
                 HStack {
-                    Label("Streaming to Apple Files", systemImage: "bolt.fill")
+                    Label("MTProto High-Speed Stream", systemImage: "bolt.fill")
                         .font(.caption2)
                         .foregroundColor(AppTheme.textMuted)
                     Spacer()
-                    Text(downloader.speedText)
+                    Text(speed)
                         .font(.caption.monospacedDigit().bold())
                         .foregroundColor(AppTheme.emerald)
                 }
             }
 
-            if let saved = downloader.savedFileURL, !downloader.isDownloading {
+            if let saved = savedURL, !isDownloading {
                 HStack(spacing: 10) {
                     Button {
                         previewItem = PreviewVideoItem(url: saved)
@@ -362,97 +379,86 @@ struct TelegramDownloaderView: View {
         .pipelineCard()
     }
 
-    // MARK: - Tab 1: Telegram Bot Inbox
-    private var botInboxPanel: some View {
+    // MARK: - Tab 1: Personal Telegram Channels (MTProto)
+    private var channelsPanel: some View {
         VStack(spacing: 14) {
-            if !api.hasTelegramBot {
+            if !mtproto.isAuthorized {
                 VStack(spacing: 12) {
-                    Image(systemName: "paperplane.circle.fill")
-                        .font(.system(size: 46))
-                        .foregroundColor(AppTheme.cyan)
-                    Text("Connect Your Telegram Bot")
+                    Image(systemName: "lock.open.fill")
+                        .font(.system(size: 44))
+                        .foregroundColor(AppTheme.emerald)
+                    Text("Log In to Telegram MTProto")
                         .font(.headline)
                         .foregroundColor(AppTheme.textPrimary)
-                    Text("Log in with your Telegram Bot Token to sync & download videos sent or forwarded to your bot straight to your iPhone.")
+                    Text("Sign in with your phone number & OTP to browse all your Telegram channels — including save/forward-restricted channels — and download videos up to 2 GB.")
                         .font(.caption)
                         .foregroundColor(AppTheme.textSecondary)
                         .multilineTextAlignment(.center)
                     NavigationLink(destination: ApiSetupView()) {
-                        Label("Open Telegram Login & API Setup", systemImage: "key.fill")
+                        Label("Login Telegram (Phone + OTP)", systemImage: "paperplane.fill")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .background(AppTheme.primary)
-                            .foregroundColor(.white)
+                            .background(AppTheme.emerald)
+                            .foregroundColor(.black)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                 }
                 .pipelineCard()
-            } else {
-                // Search & Sync Bar
-                HStack(spacing: 10) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(AppTheme.textMuted)
-                        TextField("Filter by filename or caption...", text: $searchQuery)
-                            .foregroundColor(AppTheme.textPrimary)
-                            .font(.subheadline)
-                    }
-                    .padding(10)
-                    .background(AppTheme.surfaceCardElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
-
+            } else if let activeChat = selectedChat {
+                // Inside selected channel: list videos
+                HStack {
                     Button {
-                        fetchBotMediaInbox()
+                        selectedChat = nil
+                        videoSearch = ""
                     } label: {
-                        if isLoadingBotInbox {
-                            ProgressView().tint(.black)
-                                .frame(width: 40, height: 40)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.headline)
-                                .foregroundColor(.black)
-                                .frame(width: 40, height: 40)
-                        }
+                        Label("All Channels", systemImage: "chevron.left")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(AppTheme.cyan)
                     }
-                    .background(AppTheme.emerald)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .disabled(isLoadingBotInbox)
+                    Spacer()
+                    if activeChat.isProtected {
+                        Text("🔓 Restricted Bypass Ready")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(AppTheme.emerald.opacity(0.18))
+                            .foregroundColor(AppTheme.emerald)
+                            .clipShape(Capsule())
+                    }
                 }
 
-                if let note = botStatusNote {
-                    Text(note)
-                        .font(.caption)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(AppTheme.textMuted)
+                    TextField("Search videos in \(activeChat.title)...", text: $videoSearch)
+                        .foregroundColor(AppTheme.textPrimary)
+                        .font(.subheadline)
+                }
+                .padding(10)
+                .background(AppTheme.surfaceCardElevated)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+
+                if mtproto.isLoadingMessages {
+                    ProgressView("Loading channel videos...")
+                        .tint(AppTheme.cyan)
                         .foregroundColor(AppTheme.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if filteredBotItems.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "tray.and.arrow.down")
-                            .font(.system(size: 34))
-                            .foregroundColor(AppTheme.textMuted)
-                        Text("Tap Refresh to Sync Bot Videos")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(AppTheme.textSecondary)
-                        Text("Forward or send any video to @\(api.telegramConnectedUsername.isEmpty ? "your_bot" : api.telegramConnectedUsername) on Telegram, then tap Sync.")
-                            .font(.caption)
-                            .foregroundColor(AppTheme.textMuted)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 28)
-                    .pipelineCard()
+                        .padding(.vertical, 28)
+                } else if filteredVideos.isEmpty {
+                    Text("No video messages found in the recent history of \(activeChat.title).")
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.vertical, 24)
                 } else {
-                    ForEach(filteredBotItems) { item in
+                    ForEach(filteredVideos) { item in
                         HStack(spacing: 12) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 10)
-                                    .fill(AppTheme.cyan.opacity(0.16))
+                                    .fill((item.isProtected ? AppTheme.emerald : AppTheme.cyan).opacity(0.16))
                                     .frame(width: 46, height: 46)
-                                Image(systemName: "film.fill")
-                                    .foregroundColor(AppTheme.cyan)
+                                Image(systemName: item.isProtected ? "lock.open.fill" : "film.fill")
+                                    .foregroundColor(item.isProtected ? AppTheme.emerald : AppTheme.cyan)
                             }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.fileName)
@@ -467,42 +473,126 @@ struct TelegramDownloaderView: View {
                                         .background(AppTheme.primary.opacity(0.2))
                                         .foregroundColor(AppTheme.primaryLight)
                                         .clipShape(Capsule())
-                                    if !item.caption.isEmpty {
-                                        Text(item.caption)
-                                            .font(.caption2)
-                                            .foregroundColor(AppTheme.textSecondary)
-                                            .lineLimit(1)
+                                    if item.isProtected {
+                                        Text("Restricted")
+                                            .font(.caption2.bold())
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 2)
+                                            .background(AppTheme.emerald.opacity(0.18))
+                                            .foregroundColor(AppTheme.emerald)
+                                            .clipShape(Capsule())
                                     }
+                                }
+                                if !item.caption.isEmpty {
+                                    Text(item.caption)
+                                        .font(.caption2)
+                                        .foregroundColor(AppTheme.textSecondary)
+                                        .lineLimit(2)
                                 }
                             }
                             Spacer()
                             Button {
-                                downloadTelegramBotFile(item)
+                                mtproto.startVideoDownload(item)
                             } label: {
                                 Image(systemName: "arrow.down.circle.fill")
                                     .font(.title2)
                                     .foregroundColor(AppTheme.emerald)
                             }
-                            .disabled(downloader.isDownloading)
+                            .disabled(isAnyDownloadActive)
                         }
                         .pipelineCard(cornerRadius: 14, padding: 12)
+                    }
+                }
+            } else {
+                // Channel / Chat List
+                HStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(AppTheme.textMuted)
+                        TextField("Filter channels & groups...", text: $channelSearch)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .font(.subheadline)
+                    }
+                    .padding(10)
+                    .background(AppTheme.surfaceCardElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+
+                    Button {
+                        mtproto.loadUserChats()
+                    } label: {
+                        if mtproto.isLoadingChats {
+                            ProgressView().tint(.black).frame(width: 40, height: 40)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.headline)
+                                .foregroundColor(.black)
+                                .frame(width: 40, height: 40)
+                        }
+                    }
+                    .background(AppTheme.emerald)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                if filteredChats.isEmpty {
+                    Text(mtproto.isLoadingChats ? "Loading your Telegram channels..." : "Tap refresh to load your Telegram channels & groups.")
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.vertical, 24)
+                } else {
+                    ForEach(filteredChats) { chat in
+                        Button {
+                            selectedChat = chat
+                            mtproto.loadVideosForChat(chat)
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill((chat.isProtected ? AppTheme.emerald : AppTheme.primary).opacity(0.18))
+                                        .frame(width: 44, height: 44)
+                                    Image(systemName: chat.isChannel ? "megaphone.fill" : "person.2.fill")
+                                        .foregroundColor(chat.isProtected ? AppTheme.emerald : AppTheme.primaryLight)
+                                }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(chat.title)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                        .lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        Text(chat.isChannel ? "Channel" : "Chat / Group")
+                                            .font(.caption2)
+                                            .foregroundColor(AppTheme.textSecondary)
+                                        if chat.isProtected {
+                                            Text("🔓 Restricted Supported")
+                                                .font(.caption2.bold())
+                                                .foregroundColor(AppTheme.emerald)
+                                        }
+                                    }
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.bold())
+                                    .foregroundColor(AppTheme.textMuted)
+                            }
+                            .pipelineCard(cornerRadius: 14, padding: 12)
+                        }
                     }
                 }
             }
         }
     }
 
-    // MARK: - Tab 2: Direct Link Stream Downloader
-    private var directLinkPanel: some View {
+    // MARK: - Tab 2: Telegram Post Link (t.me/...) or Direct URL
+    private var postAndDirectLinkPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("High-Speed Direct Link", systemImage: "link.circle.fill")
+                Label("Telegram Post Link or Direct URL", systemImage: "link.circle.fill")
                     .font(.headline)
                     .foregroundColor(AppTheme.cyan)
                 Spacer()
                 Button {
                     if let clip = UIPasteboard.general.string {
-                        urlInput = clip
+                        linkInput = clip
                     }
                 } label: {
                     Label("Paste", systemImage: "doc.on.clipboard")
@@ -515,20 +605,18 @@ struct TelegramDownloaderView: View {
                 }
             }
 
-            Text("Paste any direct video or stream download link. Saved directly into Apple Files → On My iPhone → Video Pipeline → Downloads.")
+            Text("Paste a Telegram post link (https://t.me/channel/123 or private https://t.me/c/...) to download via MTProto — even from save-restricted channels — or paste any direct .mp4 link.")
                 .font(.caption)
                 .foregroundColor(AppTheme.textSecondary)
 
             HStack {
-                TextField("https://example.com/episode01.mp4", text: $urlInput)
+                TextField("https://t.me/channel/123 or direct .mp4", text: $linkInput)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .foregroundColor(AppTheme.textPrimary)
-                if !urlInput.isEmpty {
-                    Button {
-                        urlInput = ""
-                    } label: {
+                if !linkInput.isEmpty {
+                    Button { linkInput = "" } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(AppTheme.textMuted)
                     }
@@ -540,12 +628,17 @@ struct TelegramDownloaderView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
 
             Button {
-                downloader.startDownload(from: urlInput)
+                let clean = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                if clean.lowercased().contains("t.me/") || clean.lowercased().contains("telegram.me/") {
+                    mtproto.downloadFromTelegramLink(clean)
+                } else {
+                    directDownloader.startDownload(from: clean)
+                }
             } label: {
-                Label("Start High-Speed Download", systemImage: "arrow.down.to.line.circle.fill")
+                Label("Download Video", systemImage: "arrow.down.to.line.circle.fill")
             }
-            .buttonStyle(PrimaryButtonStyle(color: AppTheme.cyan))
-            .disabled(urlInput.trimmingCharacters(in: .whitespaces).isEmpty || downloader.isDownloading)
+            .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+            .disabled(linkInput.trimmingCharacters(in: .whitespaces).isEmpty || isAnyDownloadActive)
         }
         .pipelineCard()
     }
@@ -575,7 +668,7 @@ struct TelegramDownloaderView: View {
                     Text("No Downloaded Videos Yet")
                         .font(.headline)
                         .foregroundColor(AppTheme.textSecondary)
-                    Text("Videos downloaded from Telegram Bot or Direct Links will appear here for instant playback & sharing.")
+                    Text("Videos downloaded via MTProto or Direct Links appear here for instant AVPlayer preview & sharing.")
                         .font(.caption)
                         .foregroundColor(AppTheme.textMuted)
                         .multilineTextAlignment(.center)
@@ -637,7 +730,6 @@ struct TelegramDownloaderView: View {
         }
     }
 
-    // MARK: - Helpers
     private func refreshDownloadedFiles() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dlDir = docs.appendingPathComponent("Downloads", isDirectory: true)
@@ -652,79 +744,5 @@ struct TelegramDownloaderView: View {
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
         let mb = Double(size) / (1024 * 1024)
         return mb >= 1.0 ? String(format: "%.1f MB", mb) : String(format: "%.0f KB", Double(size) / 1024.0)
-    }
-
-    private func fetchBotMediaInbox() {
-        let token = api.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty,
-              let url = URL(string: "https://api.telegram.org/bot\(token)/getUpdates?limit=50") else {
-            botStatusNote = "Please set your Telegram Bot Token in API Setup first."
-            return
-        }
-
-        isLoadingBotInbox = true
-        botStatusNote = nil
-
-        Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(for: URLRequest(url: url))
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let ok = json["ok"] as? Bool, ok,
-                   let updates = json["result"] as? [[String: Any]] {
-                    var found: [TelegramBotMediaItem] = []
-                    for upd in updates.reversed() {
-                        let msg = (upd["message"] as? [String: Any]) ?? (upd["channel_post"] as? [String: Any])
-                        guard let m = msg else { continue }
-                        let caption = m["caption"] as? String ?? ""
-                        let msgId = m["message_id"] as? Int ?? Int.random(in: 1...99999)
-
-                        if let video = m["video"] as? [String: Any],
-                           let fileId = video["file_id"] as? String {
-                            let name = video["file_name"] as? String ?? "tg_video_\(msgId).mp4"
-                            let size = (video["file_size"] as? NSNumber)?.int64Value ?? 0
-                            found.append(TelegramBotMediaItem(id: "\(msgId)_\(fileId)", fileId: fileId, fileName: name, caption: caption, sizeBytes: size))
-                        } else if let doc = m["document"] as? [String: Any],
-                                  let fileId = doc["file_id"] as? String {
-                            let name = doc["file_name"] as? String ?? "tg_doc_\(msgId).mp4"
-                            let size = (doc["file_size"] as? NSNumber)?.int64Value ?? 0
-                            found.append(TelegramBotMediaItem(id: "\(msgId)_\(fileId)", fileId: fileId, fileName: name, caption: caption, sizeBytes: size))
-                        }
-                    }
-                    botMediaItems = found
-                    botStatusNote = found.isEmpty ? "No recent videos in Bot inbox. Forward a video to your bot, then tap Sync." : "Synced \(found.count) video(s) from Telegram Bot."
-                } else {
-                    botStatusNote = "Could not fetch updates. Check your Bot Token in API Setup."
-                }
-            } catch {
-                botStatusNote = "Sync error: \(error.localizedDescription)"
-            }
-            isLoadingBotInbox = false
-        }
-    }
-
-    private func downloadTelegramBotFile(_ item: TelegramBotMediaItem) {
-        let token = api.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty,
-              let getFileURL = URL(string: "https://api.telegram.org/bot\(token)/getFile?file_id=\(item.fileId)") else { return }
-
-        botStatusNote = "Resolving Telegram file path..."
-        Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(for: URLRequest(url: getFileURL))
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let ok = json["ok"] as? Bool, ok,
-                   let result = json["result"] as? [String: Any],
-                   let filePath = result["file_path"] as? String {
-                    let downloadURL = "https://api.telegram.org/file/bot\(token)/\(filePath)"
-                    botStatusNote = nil
-                    downloader.startDownload(from: downloadURL, customFileName: item.fileName)
-                } else {
-                    let desc = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["description"] as? String ?? "Telegram Bot API supports direct downloads up to 20 MB."
-                    botStatusNote = "Telegram error: \(desc)"
-                }
-            } catch {
-                botStatusNote = "Error: \(error.localizedDescription)"
-            }
-        }
     }
 }

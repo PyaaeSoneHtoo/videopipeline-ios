@@ -5,14 +5,13 @@ import UIKit
 
 struct UploaderStudioView: View {
     private enum UploadTab: String, CaseIterable, Identifiable {
-        case telegram = "Telegram"
+        case telegram = "Telegram MTProto"
         case tiktok = "TikTok"
         case queue = "Queue"
         var id: String { rawValue }
     }
 
-    @ObservedObject private var api = ApiSettingsStore.shared
-    @StateObject private var uploader = TelegramUploadManager()
+    @ObservedObject private var mtproto = TelegramMTProtoManager.shared
 
     @State private var activeTab: UploadTab = .telegram
     @State private var selectedVideo: VideoAssetMetadata? = nil
@@ -20,10 +19,9 @@ struct UploaderStudioView: View {
     @State private var showAppLibrarySheet: Bool = false
     @State private var localLibraryVideos: [URL] = []
 
-    // Telegram options
-    @State private var targetChatId: String = UserDefaults.standard.string(forKey: "vp_last_tg_chat") ?? ""
-    @State private var discoveredChats: [DiscoveredTelegramChat] = []
-    @State private var isDiscoveringChats: Bool = false
+    // MTProto destination
+    @State private var selectedChat: MTProtoChatItem? = nil
+    @State private var customUsername: String = ""
     @State private var captionText: String = ""
     @State private var protectContent: Bool = true
     @State private var disableNotification: Bool = false
@@ -57,11 +55,14 @@ struct UploaderStudioView: View {
                                 .foregroundColor(AppTheme.textPrimary)
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(api.hasTelegramBot ? AppTheme.emerald : AppTheme.amber)
+                                    .fill(mtproto.isAuthorized ? AppTheme.emerald : AppTheme.amber)
                                     .frame(width: 7, height: 7)
-                                Text(api.hasTelegramBot ? "Telegram Bot Connected" : "Connect Bot for Telegram Upload")
+                                Text(mtproto.isAuthorized
+                                     ? "MTProto: \(mtproto.connectedUserName) (Up to 2 GB)"
+                                     : "Tap Key Icon to Login Telegram MTProto")
                                     .font(.caption2)
                                     .foregroundColor(AppTheme.textSecondary)
+                                    .lineLimit(1)
                             }
                         }
 
@@ -78,7 +79,6 @@ struct UploaderStudioView: View {
                         }
                     }
 
-                    // Mode Switcher
                     Picker("Upload Mode", selection: $activeTab) {
                         ForEach(UploadTab.allCases) { tab in
                             Text(tab.rawValue).tag(tab)
@@ -119,6 +119,9 @@ struct UploaderStudioView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             refreshLocalLibrary()
+            if mtproto.isAuthorized && mtproto.chats.isEmpty {
+                mtproto.loadUserChats()
+            }
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -143,11 +146,9 @@ struct UploaderStudioView: View {
                     .foregroundColor(AppTheme.textPrimary)
                 Spacer()
                 if selectedVideo != nil {
-                    Button("Clear") {
-                        selectedVideo = nil
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(AppTheme.danger)
+                    Button("Clear") { selectedVideo = nil }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(AppTheme.danger)
                 }
             }
 
@@ -230,178 +231,197 @@ struct UploaderStudioView: View {
         .pipelineCard()
     }
 
-    // MARK: - Tab 1: Telegram Channel / Group Uploader
+    // MARK: - Tab 1: Telegram MTProto Uploader (Up to 2 GB)
     private var telegramUploadPanel: some View {
         VStack(spacing: 16) {
-            // Destination Channel Card
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Target Channel / Group", systemImage: "paperplane.fill")
-                        .font(.subheadline.weight(.bold))
+            if !mtproto.isAuthorized {
+                VStack(spacing: 12) {
+                    Image(systemName: "paperplane.circle.fill")
+                        .font(.system(size: 42))
                         .foregroundColor(AppTheme.cyan)
-                    Spacer()
-                    if api.hasTelegramBot {
+                    Text("Sign In with Telegram MTProto")
+                        .font(.headline)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text("Log in with your personal phone number & OTP to upload large videos (up to 2 GB) directly to any Telegram channel or group where you are an admin.")
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                    NavigationLink(destination: ApiSetupView()) {
+                        Label("Login Telegram (Phone + OTP)", systemImage: "person.badge.key.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(AppTheme.cyan)
+                            .foregroundColor(.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                .pipelineCard()
+            } else {
+                // Target Channel Selector Card
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("Destination Channel / Group", systemImage: "megaphone.fill")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(AppTheme.cyan)
+                        Spacer()
                         Button {
-                            discoverRecentChats()
+                            mtproto.loadUserChats()
                         } label: {
-                            if isDiscoveringChats {
+                            if mtproto.isLoadingChats {
                                 ProgressView().scaleEffect(0.75)
                             } else {
-                                Label("Detect Chats", systemImage: "antenna.radiowaves.left.and.right")
+                                Label("Refresh", systemImage: "arrow.clockwise")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundColor(AppTheme.cyan)
                             }
                         }
                     }
-                }
 
-                TextField("@channel_username or -1001234567890", text: $targetChatId)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .padding(12)
-                    .background(AppTheme.surfaceCardElevated)
-                    .foregroundColor(AppTheme.textPrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
-
-                if !discoveredChats.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(discoveredChats) { chat in
-                                Button {
-                                    targetChatId = chat.id
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: chat.type == "channel" ? "megaphone.fill" : "person.2.fill")
-                                            .font(.caption2)
-                                        Text(chat.title)
-                                            .font(.caption2.weight(.semibold))
+                    if !mtproto.chats.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(mtproto.chats) { chat in
+                                    Button {
+                                        selectedChat = chat
+                                        customUsername = ""
+                                    } label: {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: chat.isChannel ? "megaphone.fill" : "person.2.fill")
+                                                .font(.caption2)
+                                            Text(chat.title)
+                                                .font(.caption2.weight(.semibold))
+                                                .lineLimit(1)
+                                        }
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 7)
+                                        .background(selectedChat?.id == chat.id ? AppTheme.cyan : AppTheme.surfaceCardElevated)
+                                        .foregroundColor(selectedChat?.id == chat.id ? .black : AppTheme.textPrimary)
+                                        .clipShape(Capsule())
                                     }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(targetChatId == chat.id ? AppTheme.cyan : AppTheme.surfaceCardElevated)
-                                    .foregroundColor(targetChatId == chat.id ? .black : AppTheme.textPrimary)
-                                    .clipShape(Capsule())
                                 }
                             }
                         }
                     }
-                }
-            }
-            .pipelineCard()
 
-            // Caption & Publishing Options Card
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Caption & Templates", systemImage: "text.alignleft")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundColor(AppTheme.primaryLight)
-                    Spacer()
-                    if let vid = selectedVideo {
-                        Button("Use Filename") {
-                            captionText = (vid.fileName as NSString).deletingPathExtension
+                    TextField("Or enter public @channel_username", text: $customUsername)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: customUsername) { newVal in
+                            if !newVal.isEmpty { selectedChat = nil }
                         }
-                        .font(.caption2.weight(.semibold))
-                        .foregroundColor(AppTheme.emerald)
-                    }
+                        .padding(12)
+                        .background(AppTheme.surfaceCardElevated)
+                        .foregroundColor(AppTheme.textPrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
                 }
+                .pipelineCard()
 
-                // Quick HTML formatting pills
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        formatChip("Bold") { captionText += "<b>Title</b>" }
-                        formatChip("Italic") { captionText += "<i>Subtitle</i>" }
-                        formatChip("Episode") {
-                            let name = selectedVideo.map { ($0.fileName as NSString).deletingPathExtension } ?? "Series Ep - 01"
-                            captionText = "🎬 <b>\(name)</b>\n\n📥 Quality: HD\n🔔 Join Channel for more episodes!"
+                // Caption & Options Card
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("Caption & Templates", systemImage: "text.alignleft")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(AppTheme.primaryLight)
+                        Spacer()
+                        if let vid = selectedVideo {
+                            Button("Use Filename") {
+                                captionText = (vid.fileName as NSString).deletingPathExtension
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(AppTheme.emerald)
                         }
-                        formatChip("Clear") { captionText = "" }
                     }
-                }
 
-                TextEditor(text: $captionText)
-                    .frame(minHeight: 88)
-                    .scrollContentBackground(.hidden)
-                    .padding(10)
-                    .background(AppTheme.surfaceCardElevated)
-                    .foregroundColor(AppTheme.textPrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            formatChip("Episode") {
+                                let name = selectedVideo.map { ($0.fileName as NSString).deletingPathExtension } ?? "Series Ep - 01"
+                                captionText = "🎬 \(name)\n\n📥 Quality: HD\n🔔 Join Channel for more episodes!"
+                            }
+                            formatChip("Movie") {
+                                let name = selectedVideo.map { ($0.fileName as NSString).deletingPathExtension } ?? "Movie Title"
+                                captionText = "🍿 \(name)\n⭐ Full HD Streaming"
+                            }
+                            formatChip("Clear") { captionText = "" }
+                        }
+                    }
 
-                Toggle(isOn: $protectContent) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    TextEditor(text: $captionText)
+                        .frame(minHeight: 85)
+                        .scrollContentBackground(.hidden)
+                        .padding(10)
+                        .background(AppTheme.surfaceCardElevated)
+                        .foregroundColor(AppTheme.textPrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+
+                    Toggle(isOn: $protectContent) {
                         Text("Protect Content (Disable Save / Forward)")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(AppTheme.textPrimary)
-                        Text("Prevents channel members from forwarding or saving")
-                            .font(.caption2)
-                            .foregroundColor(AppTheme.textMuted)
                     }
-                }
-                .tint(AppTheme.emerald)
+                    .tint(AppTheme.emerald)
 
-                Toggle(isOn: $disableNotification) {
-                    Text("Silent Broadcast (No Notification Sound)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                }
-                .tint(AppTheme.primary)
-            }
-            .pipelineCard()
-
-            // Live Upload Progress Card
-            if uploader.isUploading {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Uploading to Telegram...")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundColor(AppTheme.cyan)
-                        Spacer()
-                        Text(uploader.speedText)
-                            .font(.caption.monospacedDigit().bold())
-                            .foregroundColor(AppTheme.emerald)
+                    Toggle(isOn: $disableNotification) {
+                        Text("Silent Broadcast (No Notification Sound)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(AppTheme.textPrimary)
                     }
-                    ProgressView(value: uploader.progress)
-                        .tint(AppTheme.cyan)
-                    HStack {
-                        Text(uploader.statusText)
-                            .font(.caption)
-                            .foregroundColor(AppTheme.textSecondary)
-                        Spacer()
-                        Button("Cancel") {
-                            uploader.cancelUpload()
-                        }
-                        .font(.caption.bold())
-                        .foregroundColor(AppTheme.danger)
-                    }
+                    .tint(AppTheme.primary)
                 }
                 .pipelineCard()
-            }
 
-            if let err = uploader.errorMessage {
-                feedbackBanner(text: err, isError: true)
-            }
-            if let ok = uploader.successMessage {
-                feedbackBanner(text: ok, isError: false)
-            }
+                // Live MTProto Upload Progress
+                if mtproto.isUploading {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Uploading via Telegram MTProto...")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundColor(AppTheme.cyan)
+                            Spacer()
+                            Text(mtproto.uploadSpeedText)
+                                .font(.caption.monospacedDigit().bold())
+                                .foregroundColor(AppTheme.emerald)
+                        }
+                        ProgressView(value: mtproto.uploadProgress)
+                            .tint(AppTheme.cyan)
+                        Text(mtproto.uploadStatusText)
+                            .font(.caption)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .pipelineCard()
+                }
 
-            // Primary Publish Button
-            Button {
-                guard let vid = selectedVideo else { return }
-                UserDefaults.standard.set(targetChatId, forKey: "vp_last_tg_chat")
-                uploader.uploadVideo(
-                    botToken: api.telegramBotToken,
-                    chatId: targetChatId,
-                    videoURL: vid.url,
-                    caption: captionText,
-                    protectContent: protectContent,
-                    disableNotification: disableNotification
-                )
-            } label: {
-                Label("Publish Video to Telegram", systemImage: "paperplane.fill")
+                if let err = mtproto.uploadError {
+                    feedbackBanner(text: err, isError: true)
+                }
+                if let ok = mtproto.uploadSuccess {
+                    feedbackBanner(text: ok, isError: false)
+                }
+
+                Button {
+                    guard let vid = selectedVideo else { return }
+                    let title = selectedChat?.title ?? (customUsername.isEmpty ? "Telegram" : customUsername)
+                    mtproto.uploadVideo(
+                        chatId: selectedChat?.id,
+                        publicUsername: selectedChat == nil ? customUsername : nil,
+                        targetTitle: title,
+                        videoURL: vid.url,
+                        caption: captionText,
+                        durationSeconds: Int(vid.durationSeconds),
+                        width: vid.width,
+                        height: vid.height,
+                        protectContent: protectContent,
+                        disableNotification: disableNotification
+                    )
+                } label: {
+                    Label("Publish Video via MTProto", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+                .disabled(selectedVideo == nil || (selectedChat == nil && customUsername.trimmingCharacters(in: .whitespaces).isEmpty) || mtproto.isUploading)
             }
-            .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
-            .disabled(selectedVideo == nil || uploader.isUploading)
         }
     }
 
@@ -476,10 +496,10 @@ struct UploaderStudioView: View {
         }
     }
 
-    // MARK: - Tab 3: Upload Queue & History
+    // MARK: - Tab 3: Upload History
     private var uploadQueuePanel: some View {
         VStack(spacing: 12) {
-            if uploader.queueHistory.isEmpty {
+            if mtproto.uploadHistory.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 40))
@@ -487,7 +507,7 @@ struct UploaderStudioView: View {
                     Text("No Uploads Yet")
                         .font(.headline)
                         .foregroundColor(AppTheme.textSecondary)
-                    Text("Your published Telegram videos and upload status logs will appear here.")
+                    Text("Your MTProto published Telegram videos and upload status logs will appear here.")
                         .font(.caption)
                         .foregroundColor(AppTheme.textMuted)
                         .multilineTextAlignment(.center)
@@ -496,7 +516,7 @@ struct UploaderStudioView: View {
                 .padding(.vertical, 48)
                 .pipelineCard()
             } else {
-                ForEach(uploader.queueHistory) { item in
+                ForEach(mtproto.uploadHistory) { item in
                     HStack(spacing: 12) {
                         Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                             .font(.title3)
@@ -506,7 +526,7 @@ struct UploaderStudioView: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(AppTheme.textPrimary)
                                 .lineLimit(1)
-                            Text("Target: \(item.targetChat) • \(item.status)")
+                            Text("Target: \(item.targetTitle) • \(item.status)")
                                 .font(.caption)
                                 .foregroundColor(AppTheme.textSecondary)
                                 .lineLimit(2)
@@ -519,7 +539,7 @@ struct UploaderStudioView: View {
         }
     }
 
-    // MARK: - App Library Picker Sheet
+    // MARK: - App Library Sheet
     private var appLibraryPickerSheet: some View {
         NavigationStack {
             ZStack {
@@ -626,7 +646,7 @@ struct UploaderStudioView: View {
         }
 
         Task {
-            let meta = await TelegramUploadManager.inspectVideo(url: targetURL)
+            let meta = await VideoInspector.inspectVideo(url: targetURL)
             selectedVideo = meta
         }
     }
@@ -647,14 +667,6 @@ struct UploaderStudioView: View {
             }
         }
         localLibraryVideos = found.sorted { $0.lastPathComponent > $1.lastPathComponent }
-    }
-
-    private func discoverRecentChats() {
-        isDiscoveringChats = true
-        Task {
-            discoveredChats = await TelegramUploadManager.discoverChats(botToken: api.telegramBotToken)
-            isDiscoveringChats = false
-        }
     }
 
     private func saveToPhotos(url: URL) {

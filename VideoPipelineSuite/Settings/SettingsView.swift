@@ -72,10 +72,10 @@ struct SettingsView: View {
                                 .background(AppTheme.emerald.opacity(0.16))
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("API Keys & Telegram Login")
+                                Text("MTProto & API Setup")
                                     .font(.headline)
                                     .foregroundColor(AppTheme.textPrimary)
-                                Text("Import .env/JSON, Gemini, DeepSeek & Telegram Bot/MTProto")
+                                Text("Telegram Phone + OTP Login, Gemini, DeepSeek & .env Import")
                                     .font(.caption)
                                     .foregroundColor(AppTheme.textSecondary)
                             }

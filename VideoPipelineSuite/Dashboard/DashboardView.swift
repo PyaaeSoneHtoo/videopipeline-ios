@@ -3,6 +3,7 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var session: UserSession
     @ObservedObject private var api = ApiSettingsStore.shared
+    @ObservedObject private var mtproto = TelegramMTProtoManager.shared
 
     var body: some View {
         NavigationStack {
@@ -17,7 +18,7 @@ struct DashboardView: View {
                                 Text("Video Pipeline Suite")
                                     .font(.title2.bold())
                                     .foregroundColor(AppTheme.textPrimary)
-                                Text("iOS Studio • v1.2.0")
+                                Text("iOS MTProto Studio • v1.3.0")
                                     .font(.caption)
                                     .foregroundColor(AppTheme.textSecondary)
                             }
@@ -105,9 +106,9 @@ struct DashboardView: View {
                                         .foregroundColor(AppTheme.primaryLight)
                                 }
                                 HStack(spacing: 8) {
+                                    apiPill(name: "MTProto", active: mtproto.isAuthorized)
                                     apiPill(name: "Gemini", active: api.hasGeminiKey)
                                     apiPill(name: "DeepSeek", active: api.hasDeepSeekKey)
-                                    apiPill(name: "Telegram", active: api.isTelegramConfigured)
                                 }
                             }
                             .pipelineCard(cornerRadius: 14, padding: 14)

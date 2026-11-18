@@ -3,9 +3,13 @@ import UniformTypeIdentifiers
 
 struct ApiSetupView: View {
     @ObservedObject private var api = ApiSettingsStore.shared
+    @ObservedObject private var mtproto = TelegramMTProtoManager.shared
 
     @State private var showEnvImporter: Bool = false
     @State private var importMessage: String? = nil
+
+    @State private var otpCodeInput: String = ""
+    @State private var twoFactorPasswordInput: String = ""
 
     @State private var geminiStatus: (ok: Bool, msg: String)? = nil
     @State private var isTestingGemini: Bool = false
@@ -13,12 +17,8 @@ struct ApiSetupView: View {
     @State private var deepseekStatus: (ok: Bool, msg: String)? = nil
     @State private var isTestingDeepSeek: Bool = false
 
-    @State private var telegramStatus: (ok: Bool, msg: String)? = nil
-    @State private var isTestingTelegram: Bool = false
-
     @State private var showGeminiKey: Bool = false
     @State private var showDeepSeekKey: Bool = false
-    @State private var showBotToken: Bool = false
 
     var body: some View {
         ZStack {
@@ -26,15 +26,15 @@ struct ApiSetupView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
-                    // Quick .env / JSON Import Card
+                    // 1. Native Telegram MTProto Login Card (Phone + OTP + 2FA)
+                    telegramMTProtoCard
+
+                    // 2. Quick .env / JSON Import Card
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Label("Import API Config (.env / JSON)", systemImage: "square.and.arrow.down.on.square")
-                                .font(.headline)
-                                .foregroundColor(AppTheme.emerald)
-                            Spacer()
-                        }
-                        Text("Import your `.env` or `credentials.json` directly from PC Video Pipeline Suite to auto-fill Gemini, DeepSeek, and Telegram credentials in 1 tap.")
+                        Label("Import PC Config (.env / JSON)", systemImage: "square.and.arrow.down.on.square")
+                            .font(.headline)
+                            .foregroundColor(AppTheme.emerald)
+                        Text("Import your `.env` or `credentials.json` from PC Video Pipeline Suite to auto-fill MTProto API ID/Hash, Gemini, and DeepSeek keys in 1 tap.")
                             .font(.caption)
                             .foregroundColor(AppTheme.textSecondary)
 
@@ -62,7 +62,7 @@ struct ApiSetupView: View {
                     }
                     .pipelineCard()
 
-                    // Preferred AI Engine Selector
+                    // 3. Preferred AI Provider
                     VStack(alignment: .leading, spacing: 10) {
                         Label("Default AI Provider", systemImage: "cpu.fill")
                             .font(.headline)
@@ -77,18 +77,14 @@ struct ApiSetupView: View {
                     }
                     .pipelineCard()
 
-                    // 1. Google Gemini API Card
+                    // 4. Google Gemini API Card
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Label("Google Gemini API", systemImage: "sparkles")
                                 .font(.headline)
                                 .foregroundColor(AppTheme.primaryLight)
                             Spacer()
-                            if api.hasGeminiKey {
-                                statusBadge("Configured", color: AppTheme.emerald)
-                            } else {
-                                statusBadge("Not Set", color: AppTheme.textMuted)
-                            }
+                            statusBadge(api.hasGeminiKey ? "Configured" : "Not Set", color: api.hasGeminiKey ? AppTheme.emerald : AppTheme.textMuted)
                         }
 
                         Text("Used for AI Video Ad Cutter & Gemini Batch Renamer.")
@@ -155,18 +151,14 @@ struct ApiSetupView: View {
                     }
                     .pipelineCard()
 
-                    // 2. DeepSeek API Card
+                    // 5. DeepSeek API Card
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Label("DeepSeek AI API", systemImage: "brain.head.profile")
                                 .font(.headline)
                                 .foregroundColor(AppTheme.cyan)
                             Spacer()
-                            if api.hasDeepSeekKey {
-                                statusBadge("Configured", color: AppTheme.emerald)
-                            } else {
-                                statusBadge("Not Set", color: AppTheme.textMuted)
-                            }
+                            statusBadge(api.hasDeepSeekKey ? "Configured" : "Not Set", color: api.hasDeepSeekKey ? AppTheme.emerald : AppTheme.textMuted)
                         }
 
                         Text("Supports DeepSeek Chat & DeepSeek Vision for ad detection and series renaming.")
@@ -232,98 +224,11 @@ struct ApiSetupView: View {
                         }
                     }
                     .pipelineCard()
-
-                    // 3. Telegram Account & Bot Login Card
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Label("Telegram Login & API", systemImage: "paperplane.fill")
-                                .font(.headline)
-                                .foregroundColor(AppTheme.amber)
-                            Spacer()
-                            if api.isTelegramConfigured {
-                                statusBadge(api.telegramConnectedUsername.isEmpty ? "Saved" : "@\(api.telegramConnectedUsername)", color: AppTheme.emerald)
-                            } else {
-                                statusBadge("Not Connected", color: AppTheme.textMuted)
-                            }
-                        }
-
-                        Text("Connect your Telegram Bot Token (for instant native iOS video inbox & download) and/or store your MTProto API ID, API Hash & Phone Number.")
-                            .font(.caption)
-                            .foregroundColor(AppTheme.textSecondary)
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Telegram Bot Token (Recommended for iOS)")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundColor(AppTheme.textSecondary)
-                            secretField(
-                                placeholder: "123456789:AAH...",
-                                text: $api.telegramBotToken,
-                                isRevealed: $showBotToken
-                            )
-                        }
-
-                        Button {
-                            isTestingTelegram = true
-                            telegramStatus = nil
-                            Task {
-                                let res = await api.verifyTelegramBotToken()
-                                telegramStatus = (res.ok, res.message)
-                                isTestingTelegram = false
-                            }
-                        } label: {
-                            if isTestingTelegram {
-                                ProgressView().tint(.white)
-                            } else {
-                                Label("Login & Verify Telegram Bot", systemImage: "checkmark.seal.fill")
-                            }
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .background(AppTheme.amber)
-                        .foregroundColor(.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .disabled(isTestingTelegram)
-
-                        if let status = telegramStatus {
-                            statusFeedback(ok: status.ok, message: status.msg)
-                        }
-
-                        Divider().background(AppTheme.surfaceCardBorder).padding(.vertical, 4)
-
-                        // MTProto Account Credentials
-                        HStack {
-                            Text("Telegram MTProto Account (my.telegram.org)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(AppTheme.textSecondary)
-                            Spacer()
-                            Link("Get API ID", destination: URL(string: "https://my.telegram.org/apps")!)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundColor(AppTheme.primaryLight)
-                        }
-
-                        styledTextField("Phone Number (+959...)", text: $api.telegramPhone, keyboard: .phonePad)
-                        styledTextField("Telegram API ID (e.g. 12345678)", text: $api.telegramApiId, keyboard: .numberPad)
-                        styledTextField("Telegram API Hash (32-char hex)", text: $api.telegramApiHash, keyboard: .asciiCapable)
-
-                        if api.isTelegramConfigured {
-                            Button(role: .destructive) {
-                                api.clearTelegramLogin()
-                                telegramStatus = (false, "Telegram credentials cleared.")
-                            } label: {
-                                Label("Disconnect Telegram", systemImage: "xmark.circle")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(AppTheme.danger)
-                            }
-                            .padding(.top, 4)
-                        }
-                    }
-                    .pipelineCard()
                 }
                 .padding(16)
             }
         }
-        .navigationTitle("API & Telegram Setup")
+        .navigationTitle("MTProto & API Setup")
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(
             isPresented: $showEnvImporter,
@@ -345,6 +250,161 @@ struct ApiSetupView: View {
                 importMessage = "Import error: \(error.localizedDescription)"
             }
         }
+    }
+
+    // MARK: - Native Telegram MTProto Login Wizard Card
+    private var telegramMTProtoCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Telegram MTProto Login", systemImage: "paperplane.fill")
+                    .font(.headline)
+                    .foregroundColor(AppTheme.cyan)
+                Spacer()
+                statusBadge(
+                    mtproto.isAuthorized ? "Connected" : (mtproto.authStage == .disconnected ? "Offline" : "Signing In"),
+                    color: mtproto.isAuthorized ? AppTheme.emerald : AppTheme.amber
+                )
+            }
+
+            Text("Sign in with your personal Telegram account (Phone + OTP) via official TDLib MTProto. Unlocks 2 GB downloads, restricted channel bypass, and direct channel uploads.")
+                .font(.caption)
+                .foregroundColor(AppTheme.textSecondary)
+
+            switch mtproto.authStage {
+            case .ready:
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(AppTheme.emerald.opacity(0.2))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.title3)
+                            .foregroundColor(AppTheme.emerald)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(mtproto.connectedUserName.isEmpty ? "Telegram Connected" : mtproto.connectedUserName)
+                            .font(.subheadline.bold())
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("\(mtproto.connectedPhone) • \(mtproto.chats.count) chats loaded")
+                            .font(.caption)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(AppTheme.emerald.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                HStack(spacing: 10) {
+                    Button {
+                        mtproto.loadUserChats()
+                    } label: {
+                        Label("Refresh Chats", systemImage: "arrow.clockwise")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(AppTheme.primary.opacity(0.2))
+                            .foregroundColor(AppTheme.primaryLight)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+
+                    Button {
+                        mtproto.logout()
+                    } label: {
+                        Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(AppTheme.danger.opacity(0.18))
+                            .foregroundColor(AppTheme.danger)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+
+            case .disconnected, .connecting:
+                HStack {
+                    Text("Step 1: Enter API ID & API Hash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    Link("Get at my.telegram.org →", destination: URL(string: "https://my.telegram.org/apps")!)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(AppTheme.cyan)
+                }
+
+                styledTextField("Telegram API ID (e.g. 12345678)", text: $api.telegramApiId, keyboard: .numberPad)
+                styledTextField("Telegram API Hash (32-char hex)", text: $api.telegramApiHash, keyboard: .asciiCapable)
+
+                Button {
+                    mtproto.startClient(apiIdString: api.telegramApiId, apiHash: api.telegramApiHash)
+                } label: {
+                    if mtproto.authStage == .connecting {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Connecting to MTProto...")
+                        }
+                    } else {
+                        Label("Connect MTProto", systemImage: "bolt.horizontal.fill")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle(color: AppTheme.cyan))
+
+            case .waitPhoneNumber:
+                Text("Step 2: Enter Your Telegram Phone Number")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(AppTheme.emerald)
+
+                styledTextField("+959xxxxxxxxx", text: $api.telegramPhone, keyboard: .phonePad)
+
+                Button {
+                    mtproto.submitPhoneNumber(api.telegramPhone)
+                } label: {
+                    Label("Send OTP Verification Code", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+
+            case .waitCode:
+                Text("Step 3: Enter 5-Digit OTP Code from Telegram")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(AppTheme.amber)
+
+                styledTextField("12345", text: $otpCodeInput, keyboard: .numberPad)
+
+                Button {
+                    mtproto.submitAuthCode(otpCodeInput)
+                } label: {
+                    Label("Verify OTP & Sign In", systemImage: "checkmark.circle.fill")
+                }
+                .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+
+            case .waitPassword(let hint):
+                Text("Step 4: Two-Step Verification Password\(hint.isEmpty ? "" : " (Hint: \(hint))")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(AppTheme.amber)
+
+                SecureField("Enter Telegram 2FA Cloud Password", text: $twoFactorPasswordInput)
+                    .padding(12)
+                    .background(AppTheme.surfaceCardElevated)
+                    .foregroundColor(AppTheme.textPrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.surfaceCardBorder, lineWidth: 1))
+
+                Button {
+                    mtproto.submitTwoFactorPassword(twoFactorPasswordInput)
+                } label: {
+                    Label("Unlock & Sign In", systemImage: "lock.open.fill")
+                }
+                .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
+            }
+
+            if let msg = mtproto.authMessage, mtproto.authError == nil {
+                statusFeedback(ok: true, message: msg)
+            }
+            if let err = mtproto.authError {
+                statusFeedback(ok: false, message: err)
+            }
+        }
+        .pipelineCard()
     }
 
     private func secretField(placeholder: String, text: Binding<String>, isRevealed: Binding<Bool>) -> some View {

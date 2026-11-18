@@ -23,9 +23,6 @@ final class ApiSettingsStore: ObservableObject {
         static let tgPhone = "vp_tg_phone"
         static let tgApiId = "vp_tg_api_id"
         static let tgApiHash = "vp_tg_api_hash"
-        static let tgBotToken = "vp_tg_bot_token"
-        static let tgConnectedName = "vp_tg_connected_name"
-        static let tgConnectedUsername = "vp_tg_connected_username"
     }
 
     @Published var geminiApiKey: String {
@@ -47,7 +44,7 @@ final class ApiSettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(preferredProvider.rawValue, forKey: Keys.preferredAIProvider) }
     }
 
-    // Telegram Credentials
+    // Telegram MTProto Credentials (my.telegram.org)
     @Published var telegramPhone: String {
         didSet { UserDefaults.standard.set(telegramPhone, forKey: Keys.tgPhone) }
     }
@@ -57,25 +54,13 @@ final class ApiSettingsStore: ObservableObject {
     @Published var telegramApiHash: String {
         didSet { UserDefaults.standard.set(telegramApiHash, forKey: Keys.tgApiHash) }
     }
-    @Published var telegramBotToken: String {
-        didSet { UserDefaults.standard.set(telegramBotToken, forKey: Keys.tgBotToken) }
-    }
-    @Published var telegramConnectedName: String {
-        didSet { UserDefaults.standard.set(telegramConnectedName, forKey: Keys.tgConnectedName) }
-    }
-    @Published var telegramConnectedUsername: String {
-        didSet { UserDefaults.standard.set(telegramConnectedUsername, forKey: Keys.tgConnectedUsername) }
-    }
 
     var hasGeminiKey: Bool { !geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var hasDeepSeekKey: Bool { !deepseekApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var hasTelegramBot: Bool { !telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var hasTelegramMTProto: Bool {
-        !telegramPhone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !telegramApiId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+    var hasTelegramMTProtoKeys: Bool {
+        Int(telegramApiId.trimmingCharacters(in: .whitespacesAndNewlines)) != nil &&
         !telegramApiHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    var isTelegramConfigured: Bool { hasTelegramBot || hasTelegramMTProto }
 
     static let geminiModels: [(id: String, label: String)] = [
         ("gemini-2.5-flash", "Gemini 2.5 Flash (Recommended)"),
@@ -103,9 +88,6 @@ final class ApiSettingsStore: ObservableObject {
         self.telegramPhone = d.string(forKey: Keys.tgPhone) ?? ""
         self.telegramApiId = d.string(forKey: Keys.tgApiId) ?? ""
         self.telegramApiHash = d.string(forKey: Keys.tgApiHash) ?? ""
-        self.telegramBotToken = d.string(forKey: Keys.tgBotToken) ?? ""
-        self.telegramConnectedName = d.string(forKey: Keys.tgConnectedName) ?? ""
-        self.telegramConnectedUsername = d.string(forKey: Keys.tgConnectedUsername) ?? ""
     }
 
     // MARK: - Import .env or JSON Config File (from PC Video Pipeline Suite)
@@ -123,14 +105,11 @@ final class ApiSettingsStore: ObservableObject {
             if let v = stringValue(json, keys: ["DEEPSEEK_API_KEY", "deepseek_api_key", "deepseekKey"]) {
                 deepseekApiKey = v; imported.append("DeepSeek Key")
             }
-            if let v = stringValue(json, keys: ["TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "bot_token"]) {
-                telegramBotToken = v; imported.append("Telegram Bot Token")
-            }
             if let v = stringValue(json, keys: ["TELEGRAM_API_ID", "API_ID", "api_id"]) {
-                telegramApiId = v; imported.append("Telegram API ID")
+                telegramApiId = v; imported.append("MTProto API ID")
             }
             if let v = stringValue(json, keys: ["TELEGRAM_API_HASH", "API_HASH", "api_hash"]) {
-                telegramApiHash = v; imported.append("Telegram API Hash")
+                telegramApiHash = v; imported.append("MTProto API Hash")
             }
             if let v = stringValue(json, keys: ["TELEGRAM_PHONE", "PHONE", "phone"]) {
                 telegramPhone = v; imported.append("Telegram Phone")
@@ -160,12 +139,10 @@ final class ApiSettingsStore: ObservableObject {
                 deepseekModel = val; imported.append("DeepSeek Model")
             case "DEEPSEEK_ENDPOINT":
                 deepseekEndpoint = val
-            case "TELEGRAM_BOT_TOKEN", "BOT_TOKEN":
-                telegramBotToken = val; imported.append("Telegram Bot Token")
             case "TELEGRAM_API_ID", "API_ID":
-                telegramApiId = val; imported.append("Telegram API ID")
+                telegramApiId = val; imported.append("MTProto API ID")
             case "TELEGRAM_API_HASH", "API_HASH":
-                telegramApiHash = val; imported.append("Telegram API Hash")
+                telegramApiHash = val; imported.append("MTProto API Hash")
             case "TELEGRAM_PHONE", "PHONE":
                 telegramPhone = val; imported.append("Telegram Phone")
             default:
@@ -173,7 +150,7 @@ final class ApiSettingsStore: ObservableObject {
             }
         }
 
-        return (imported.count, imported.isEmpty ? "No recognized keys found. Supported: GEMINI_API_KEY, DEEPSEEK_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE." : "Imported: \(imported.joined(separator: ", "))")
+        return (imported.count, imported.isEmpty ? "No recognized keys found. Supported: GEMINI_API_KEY, DEEPSEEK_API_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE." : "Imported: \(imported.joined(separator: ", "))")
     }
 
     private func stringValue(_ dict: [String: Any], keys: [String]) -> String? {
@@ -188,7 +165,7 @@ final class ApiSettingsStore: ObservableObject {
         return nil
     }
 
-    // MARK: - Live API Verifiers
+    // MARK: - Live AI API Verifiers
     func testGeminiKey() async -> (ok: Bool, message: String) {
         let key = geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return (false, "Enter a Gemini API Key first.") }
@@ -232,41 +209,5 @@ final class ApiSettingsStore: ObservableObject {
         } catch {
             return (false, error.localizedDescription)
         }
-    }
-
-    func verifyTelegramBotToken() async -> (ok: Bool, message: String) {
-        let token = telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { return (false, "Enter your Telegram Bot Token first.") }
-        guard let url = URL(string: "https://api.telegram.org/bot\(token)/getMe") else {
-            return (false, "Invalid Telegram Bot Token format.")
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if (200..<300).contains(code),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let ok = json["ok"] as? Bool, ok,
-               let result = json["result"] as? [String: Any] {
-                let firstName = result["first_name"] as? String ?? "Telegram Bot"
-                let username = result["username"] as? String ?? ""
-                self.telegramConnectedName = firstName
-                self.telegramConnectedUsername = username
-                return (true, "Connected to Telegram as \(firstName) (@\(username))!")
-            } else {
-                let desc = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["description"] as? String ?? "Invalid Bot Token (HTTP \(code))"
-                return (false, "Telegram error: \(desc)")
-            }
-        } catch {
-            return (false, error.localizedDescription)
-        }
-    }
-
-    func clearTelegramLogin() {
-        telegramPhone = ""
-        telegramApiId = ""
-        telegramApiHash = ""
-        telegramBotToken = ""
-        telegramConnectedName = ""
-        telegramConnectedUsername = ""
     }
 }
