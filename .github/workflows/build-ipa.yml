@@ -1,0 +1,93 @@
+name: Build and Release Unsigned iOS IPA
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    name: Compile iOS Unsigned IPA
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode Version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Compile Release App (Unsigned arm64)
+        run: |
+          xcodebuild \
+            -project VideoPipelineSuite.xcodeproj \
+            -scheme VideoPipelineSuite \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package Unsigned IPA
+        run: |
+          mkdir -p dist/Payload
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -maxdepth 1 | head -n 1)
+          echo "Found app bundle at: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: .app bundle not found!"
+            exit 1
+          fi
+          cp -R "$APP_PATH" dist/Payload/
+          cd dist
+          zip -r -y VideoPipelineSuite-v1.0.0-unsigned.ipa Payload
+          rm -rf Payload
+          ls -lh VideoPipelineSuite-v1.0.0-unsigned.ipa
+
+      - name: Upload Unsigned IPA as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoPipelineSuite-iOS-Unsigned-IPA
+          path: dist/*.ipa
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0-ios
+          name: "Video Pipeline Suite for iOS v1.0.0 (Unsigned IPA)"
+          body: |
+            ### 🍎 Video Pipeline Suite for iOS v1.0.0 (Unsigned IPA)
+
+            Native SwiftUI + AVFoundation mobile video automation suite compiled cleanly via GitHub Actions:
+            - 🔐 **Firebase Authentication & Device License Slot Binding** (`DEV-IOS-XXXX`)
+            - 🏷️ **Batch Video Renamer**: Strip Telegram message IDs (`_1234`), Fast Regex formatting, and Google Gemini AI smart renaming directly on iOS Files folders
+            - ✂️ **Lossless Video Intro Trimmer**: Instant `AVAssetExportPresetPassthrough` stream-copy trimming without re-encoding + interactive AVPlayer preview & Save to Photos/Files
+            - 📥 **Telegram & Direct Downloader**: Streaming download with live progress, MB counter, speed tracker, saved to Files app (`On My iPhone → Video Pipeline`)
+            - 📺 **YouTube Downloader**: Metadata lookup (title & channel) with MP4/MP3 export
+
+            #### 📲 How to Install (Unsigned IPA):
+            Because this is an **unsigned `.ipa`**, install it using any iOS sideloading tool:
+            - **TrollStore** (Permanent install without signing on supported iOS versions)
+            - **AltStore / SideStore / Sideloadly** (Sign with your free Apple ID)
+            - **ESign / Scarlet / Feather** (Sign with your certificate)
+          files: dist/*.ipa
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
