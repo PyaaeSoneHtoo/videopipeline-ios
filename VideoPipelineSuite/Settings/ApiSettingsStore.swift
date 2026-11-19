@@ -31,6 +31,7 @@ final class ApiSettingsStore: ObservableObject {
     @Published var geminiModel: String {
         didSet { UserDefaults.standard.set(geminiModel, forKey: Keys.geminiModel) }
     }
+    @Published var geminiModels: [(id: String, label: String)] = ApiSettingsStore.defaultGeminiModels
     @Published var deepseekApiKey: String {
         didSet { UserDefaults.standard.set(deepseekApiKey, forKey: Keys.deepseekApiKey) }
     }
@@ -62,11 +63,22 @@ final class ApiSettingsStore: ObservableObject {
         !telegramApiHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    static let geminiModels: [(id: String, label: String)] = [
-        ("gemini-2.5-flash", "Gemini 2.5 Flash (Recommended)"),
-        ("gemini-2.0-flash", "Gemini 2.0 Flash (Fast)"),
-        ("gemini-1.5-flash", "Gemini 1.5 Flash (Stable)"),
-        ("gemini-2.5-pro", "Gemini 2.5 Pro (High Accuracy)")
+    static let defaultGeminiModels: [(id: String, label: String)] = [
+        ("auto", "🔄 Auto-Detect (Best Available)"),
+        ("gemini-2.0-flash", "⚡ Gemini 2.0 Flash (Recommended)"),
+        ("gemini-1.5-flash", "🚀 Gemini 1.5 Flash (Fast & Stable)"),
+        ("gemini-2.0-flash-lite", "🟢 Gemini 2.0 Flash-Lite"),
+        ("gemini-1.5-pro", "🧠 Gemini 1.5 Pro"),
+        ("gemini-2.5-flash", "🧪 Gemini 2.5 Flash")
+    ]
+
+    static let preferredGeminiOrder: [String] = [
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro",
+        "gemini-2.0-pro-exp",
+        "gemini-2.5-flash"
     ]
 
     static let deepseekModels: [(id: String, label: String)] = [
@@ -78,7 +90,11 @@ final class ApiSettingsStore: ObservableObject {
     private init() {
         let d = UserDefaults.standard
         self.geminiApiKey = d.string(forKey: Keys.geminiApiKey) ?? ""
-        self.geminiModel = d.string(forKey: Keys.geminiModel) ?? "gemini-2.5-flash"
+        var savedModel = d.string(forKey: Keys.geminiModel) ?? "auto"
+        if savedModel == "gemini-2.5-flash" {
+            savedModel = "auto"
+        }
+        self.geminiModel = savedModel
         self.deepseekApiKey = d.string(forKey: Keys.deepseekApiKey) ?? ""
         self.deepseekModel = d.string(forKey: Keys.deepseekModel) ?? "deepseek-chat"
         self.deepseekEndpoint = d.string(forKey: Keys.deepseekEndpoint) ?? "https://api.deepseek.com/chat/completions"
@@ -169,22 +185,92 @@ final class ApiSettingsStore: ObservableObject {
     func testGeminiKey() async -> (ok: Bool, message: String) {
         let key = geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return (false, "Enter a Gemini API Key first.") }
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?key=\(key)") else {
-            return (false, "Invalid API key format.")
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if (200..<300).contains(code) {
-                return (true, "Gemini API Key verified & active!")
-            } else {
-                let err = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
-                let msg = err?["message"] as? String ?? "HTTP \(code)"
-                return (false, "Gemini error: \(msg)")
+
+        // 1. Discover available models from the account
+        var discoveredModelIds: [String] = []
+        if let listUrl = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?key=\(key)") {
+            var listReq = URLRequest(url: listUrl)
+            listReq.timeoutInterval = 15
+            if let (data, response) = try? await URLSession.shared.data(for: listReq),
+               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let modelsArr = root["models"] as? [[String: Any]] {
+
+                var parsedList: [(id: String, label: String)] = [
+                    ("auto", "🔄 Auto-Detect (Best Available)")
+                ]
+
+                for m in modelsArr {
+                    guard let rawName = m["name"] as? String else { continue }
+                    let cleanId = rawName.replacingOccurrences(of: "models/", with: "")
+                    let methods = m["supportedGenerationMethods"] as? [String] ?? []
+                    guard methods.contains("generateContent") else { continue }
+
+                    discoveredModelIds.append(cleanId)
+                    let dName = m["displayName"] as? String ?? cleanId
+                    parsedList.append((cleanId, "\(dName) (\(cleanId))"))
+                }
+
+                if parsedList.count > 1 {
+                    self.geminiModels = parsedList
+                }
             }
-        } catch {
-            return (false, error.localizedDescription)
         }
+
+        // 2. Cascade test candidates
+        var candidatesToTest: [String] = []
+        if !geminiModel.isEmpty && geminiModel != "auto" {
+            candidatesToTest.append(geminiModel)
+        }
+        for pref in ApiSettingsStore.preferredGeminiOrder {
+            if (discoveredModelIds.isEmpty || discoveredModelIds.contains(pref)) && !candidatesToTest.contains(pref) {
+                candidatesToTest.append(pref)
+            }
+        }
+        for disc in discoveredModelIds {
+            if !candidatesToTest.contains(disc) {
+                candidatesToTest.append(disc)
+            }
+        }
+        if candidatesToTest.isEmpty {
+            candidatesToTest = ApiSettingsStore.preferredGeminiOrder
+        }
+
+        // Test each candidate until one passes
+        var lastErrorMsg = ""
+        for candidate in candidatesToTest {
+            guard let genUrl = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(candidate):generateContent?key=\(key)") else { continue }
+            var testReq = URLRequest(url: genUrl)
+            testReq.httpMethod = "POST"
+            testReq.timeoutInterval = 15
+            testReq.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            let payload: [String: Any] = [
+                "contents": [["parts": [["text": "Ping test"]]]]
+            ]
+            testReq.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: testReq)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if (200..<300).contains(code) {
+                    self.geminiModel = candidate
+                    return (true, "Gemini key verified! Active model: \(candidate)")
+                }
+
+                if code == 400 || code == 401 || code == 403 {
+                    let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
+                    let msg = errObj?["message"] as? String ?? "HTTP \(code)"
+                    if msg.contains("API_KEY_INVALID") || msg.contains("API key not valid") || code == 401 {
+                        return (false, "Invalid Gemini API Key: \(msg)")
+                    }
+                }
+                lastErrorMsg = "\(candidate) (HTTP \(code))"
+            } catch {
+                lastErrorMsg = error.localizedDescription
+            }
+        }
+
+        return (false, "Could not find an active Gemini model. Last tried: \(lastErrorMsg)")
     }
 
     func testDeepSeekKey() async -> (ok: Bool, message: String) {

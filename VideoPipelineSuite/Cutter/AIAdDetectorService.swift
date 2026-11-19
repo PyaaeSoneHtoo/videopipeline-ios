@@ -95,9 +95,22 @@ enum AIAdDetectorService {
         prompt: String,
         frames: [(ts: Double, b64: String)]
     ) async throws -> String {
-        let targetModel = model.isEmpty ? "gemini-2.5-flash" : model
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(targetModel):generateContent?key=\(apiKey)") else {
-            throw NSError(domain: "AIAdDetector", code: -3, userInfo: [NSLocalizedDescriptionKey: "Invalid Gemini URL"])
+        let cascadeList = [
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-pro",
+            "gemini-2.0-pro-exp",
+            "gemini-2.5-flash"
+        ]
+        var modelsToTry: [String] = []
+        if !model.isEmpty && model != "auto" {
+            modelsToTry.append(model)
+        }
+        for m in cascadeList {
+            if !modelsToTry.contains(m) {
+                modelsToTry.append(m)
+            }
         }
 
         var parts: [[String: Any]] = [["text": prompt]]
@@ -115,29 +128,53 @@ enum AIAdDetectorService {
             "contents": [["parts": parts]],
             "generationConfig": ["temperature": 0.1]
         ]
+        let bodyData = try JSONSerialization.data(withJSONObject: payload)
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 45
-        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        var lastError: Error?
+        for currModel in modelsToTry {
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(currModel):generateContent?key=\(apiKey)") else {
+                continue
+            }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 45
+            req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            req.httpBody = bodyData
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) else {
-            let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
-            let msg = errObj?["message"] as? String ?? "Gemini HTTP \(code)"
-            throw NSError(domain: "AIAdDetector", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
+            do {
+                let (data, response) = try await URLSession.shared.data(for: req)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if (200..<300).contains(code) {
+                    if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let candidates = root["candidates"] as? [[String: Any]],
+                       let content = candidates.first?["content"] as? [String: Any],
+                       let respParts = content["parts"] as? [[String: Any]],
+                       let text = respParts.first?["text"] as? String {
+                        return text
+                    }
+                    return "{}"
+                }
+
+                if code == 400 || code == 401 || code == 403 {
+                    let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
+                    let msg = errObj?["message"] as? String ?? "HTTP \(code)"
+                    if msg.contains("API_KEY_INVALID") || code == 401 {
+                        throw NSError(domain: "AIAdDetector", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
+                    }
+                }
+
+                let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
+                let msg = errObj?["message"] as? String ?? "\(currModel) HTTP \(code)"
+                lastError = NSError(domain: "AIAdDetector", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
+            } catch {
+                if let nsErr = error as NSError?, nsErr.domain == "AIAdDetector" && nsErr.code == 401 {
+                    throw error
+                }
+                lastError = error
+            }
         }
 
-        if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let candidates = root["candidates"] as? [[String: Any]],
-           let content = candidates.first?["content"] as? [String: Any],
-           let respParts = content["parts"] as? [[String: Any]],
-           let text = respParts.first?["text"] as? String {
-            return text
-        }
-        return "{}"
+        throw lastError ?? NSError(domain: "AIAdDetector", code: -1, userInfo: [NSLocalizedDescriptionKey: "All Gemini models failed."])
     }
 
     private static func queryDeepSeekVision(

@@ -103,7 +103,7 @@ struct ApiSetupView: View {
                                 .foregroundColor(AppTheme.textSecondary)
                             Spacer()
                             Picker("Gemini Model", selection: $api.geminiModel) {
-                                ForEach(ApiSettingsStore.geminiModels, id: \.id) { m in
+                                ForEach(api.geminiModels, id: \.id) { m in
                                     Text(m.label).tag(m.id)
                                 }
                             }
