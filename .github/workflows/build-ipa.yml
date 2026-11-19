@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-ipa:
     name: Compile iOS Unsigned IPA (MTProto TDLib)
-    runs-on: macos-15
+    runs-on: macos-latest
 
     steps:
       - name: Checkout Repository
