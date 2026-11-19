@@ -64,21 +64,30 @@ final class ApiSettingsStore: ObservableObject {
     }
 
     static let defaultGeminiModels: [(id: String, label: String)] = [
-        ("auto", "🔄 Auto-Detect (Best Available)"),
-        ("gemini-2.0-flash", "⚡ Gemini 2.0 Flash (Recommended)"),
-        ("gemini-1.5-flash", "🚀 Gemini 1.5 Flash (Fast & Stable)"),
-        ("gemini-2.0-flash-lite", "🟢 Gemini 2.0 Flash-Lite"),
-        ("gemini-1.5-pro", "🧠 Gemini 1.5 Pro"),
-        ("gemini-2.5-flash", "🧪 Gemini 2.5 Flash")
+        ("auto", "🔄 Auto-Cascade (Smart Best Available)"),
+        ("gemini-3-flash-preview", "⚡ Gemini 3 Flash Preview (Recommended)"),
+        ("gemini-3.5-flash-lite", "🚀 Gemini 3.5 Flash-Lite (Ultra Fast)"),
+        ("gemini-3.1-flash-lite", "🟢 Gemini 3.1 Flash-Lite (High Quota)"),
+        ("gemini-flash-lite-latest", "🔹 Gemini Flash-Lite Latest"),
+        ("gemini-3.1-flash-lite-preview", "🧪 Gemini 3.1 Flash-Lite Preview"),
+        ("gemini-robotics-er-2-preview", "🤖 Gemini Robotics-ER 2 Preview"),
+        ("gemini-3.8-flash", "🌟 Gemini 3.8 Flash"),
+        ("gemini-3.7-flash", "✨ Gemini 3.7 Flash"),
+        ("gemini-3.1-pro-preview", "🧠 Gemini 3.1 Pro Preview"),
+        ("gemini-pro-latest", "💎 Gemini Pro Latest")
     ]
 
     static let preferredGeminiOrder: [String] = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-2.0-pro-exp",
-        "gemini-2.5-flash"
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-robotics-er-2-preview",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-pro-latest"
     ]
 
     static let deepseekModels: [(id: String, label: String)] = [
@@ -91,7 +100,7 @@ final class ApiSettingsStore: ObservableObject {
         let d = UserDefaults.standard
         self.geminiApiKey = d.string(forKey: Keys.geminiApiKey) ?? ""
         var savedModel = d.string(forKey: Keys.geminiModel) ?? "auto"
-        if savedModel == "gemini-2.5-flash" {
+        if savedModel.contains("2.5") || savedModel.contains("2.0") || savedModel.contains("1.5") {
             savedModel = "auto"
         }
         self.geminiModel = savedModel
@@ -197,14 +206,17 @@ final class ApiSettingsStore: ObservableObject {
                let modelsArr = root["models"] as? [[String: Any]] {
 
                 var parsedList: [(id: String, label: String)] = [
-                    ("auto", "🔄 Auto-Detect (Best Available)")
+                    ("auto", "🔄 Auto-Cascade (Smart Best Available)")
                 ]
+
+                let deprecatedModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-lite", "gemini-2.0-pro-exp"]
 
                 for m in modelsArr {
                     guard let rawName = m["name"] as? String else { continue }
                     let cleanId = rawName.replacingOccurrences(of: "models/", with: "")
                     let methods = m["supportedGenerationMethods"] as? [String] ?? []
                     guard methods.contains("generateContent") else { continue }
+                    if deprecatedModels.contains(cleanId) { continue }
 
                     discoveredModelIds.append(cleanId)
                     let dName = m["displayName"] as? String ?? cleanId
@@ -219,16 +231,16 @@ final class ApiSettingsStore: ObservableObject {
 
         // 2. Cascade test candidates
         var candidatesToTest: [String] = []
-        if !geminiModel.isEmpty && geminiModel != "auto" {
+        if !geminiModel.isEmpty && geminiModel != "auto" && !geminiModel.contains("2.5") && !geminiModel.contains("2.0") && !geminiModel.contains("1.5") {
             candidatesToTest.append(geminiModel)
         }
         for pref in ApiSettingsStore.preferredGeminiOrder {
-            if (discoveredModelIds.isEmpty || discoveredModelIds.contains(pref)) && !candidatesToTest.contains(pref) {
+            if !candidatesToTest.contains(pref) {
                 candidatesToTest.append(pref)
             }
         }
         for disc in discoveredModelIds {
-            if !candidatesToTest.contains(disc) {
+            if !disc.contains("2.5") && !disc.contains("2.0") && !disc.contains("1.5") && !candidatesToTest.contains(disc) {
                 candidatesToTest.append(disc)
             }
         }
@@ -238,7 +250,10 @@ final class ApiSettingsStore: ObservableObject {
 
         // Test each candidate until one passes
         var lastErrorMsg = ""
-        for candidate in candidatesToTest {
+        var idx = 0
+        while idx < candidatesToTest.count {
+            let candidate = candidatesToTest[idx]
+            idx += 1
             guard let genUrl = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(candidate):generateContent?key=\(key)") else { continue }
             var testReq = URLRequest(url: genUrl)
             testReq.httpMethod = "POST"
@@ -257,13 +272,23 @@ final class ApiSettingsStore: ObservableObject {
                     return (true, "Gemini key verified! Active model: \(candidate)")
                 }
 
+                let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
+                let msg = errObj?["message"] as? String ?? "HTTP \(code)"
+
                 if code == 400 || code == 401 || code == 403 {
-                    let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
-                    let msg = errObj?["message"] as? String ?? "HTTP \(code)"
                     if msg.contains("API_KEY_INVALID") || msg.contains("API key not valid") || code == 401 {
                         return (false, "Invalid Gemini API Key: \(msg)")
                     }
                 }
+
+                // If Google suggests a replacement model in the error message
+                if let range = msg.range(of: "models/(gemini-[\\w\\.\\-]+)", options: .regularExpression) {
+                    let suggested = String(msg[range]).replacingOccurrences(of: "models/", with: "")
+                    if !candidatesToTest.contains(suggested) {
+                        candidatesToTest.append(suggested)
+                    }
+                }
+
                 lastErrorMsg = "\(candidate) (HTTP \(code))"
             } catch {
                 lastErrorMsg = error.localizedDescription

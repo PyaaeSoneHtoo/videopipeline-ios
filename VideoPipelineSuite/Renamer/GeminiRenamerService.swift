@@ -87,16 +87,9 @@ enum GeminiRenamerService {
     }
 
     private static func callGemini(prompt: String, apiKey: String, model: String) async throws -> String {
-        let cascadeList = [
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
-            "gemini-2.0-pro-exp",
-            "gemini-2.5-flash"
-        ]
+        let cascadeList = ApiSettingsStore.preferredGeminiOrder
         var modelsToTry: [String] = []
-        if !model.isEmpty && model != "auto" {
+        if !model.isEmpty && model != "auto" && !model.contains("2.5") && !model.contains("2.0") && !model.contains("1.5") {
             modelsToTry.append(model)
         }
         for m in cascadeList {
