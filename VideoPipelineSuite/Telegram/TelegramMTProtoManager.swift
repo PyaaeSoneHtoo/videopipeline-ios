@@ -8,6 +8,7 @@ enum MTProtoAuthStage: Equatable {
     case waitPhoneNumber
     case waitCode
     case waitPassword(hint: String)
+    case waitQrCode(link: String)
     case ready
 }
 
@@ -200,6 +201,35 @@ final class TelegramMTProtoManager: ObservableObject {
             Task { _ = try? await oldClient.close() }
         }
         authStage = .disconnected
+    }
+
+    // MARK: - 1-Click Instant QR Login (Scan with Phone)
+    func requestQrCodeLogin() {
+        authError = nil
+        isBusyAuth = true
+        authMessage = "Requesting Telegram QR login token..."
+
+        let api = ApiSettingsStore.shared
+        if client == nil {
+            startClient(apiIdString: api.telegramApiId, apiHash: api.telegramApiHash)
+        }
+
+        guard let td = client else {
+            isBusyAuth = false
+            authError = "Telegram client initialization in progress. Please retry in a moment."
+            return
+        }
+
+        Task {
+            do {
+                _ = try await td.requestQrCodeAuthentication(otherUserIds: [])
+            } catch {
+                await MainActor.run {
+                    self.isBusyAuth = false
+                    self.authError = "QR Login error: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     // MARK: - Auth Actions
@@ -609,6 +639,11 @@ final class TelegramMTProtoManager: ObservableObject {
             authError = nil
             authMessage = "Connected via Telegram MTProto!"
             fetchCurrentUserAndChats()
+        case .authorizationStateWaitOtherDeviceConfirmation(let confirm):
+            isSendingParameters = false
+            isBusyAuth = false
+            authStage = .waitQrCode(link: confirm.link)
+            authMessage = "Scan QR code with your Telegram app (Settings > Devices > Link Desktop Device)."
         case .authorizationStateClosed:
             isSendingParameters = false
             isBusyAuth = false

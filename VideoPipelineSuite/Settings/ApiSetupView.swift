@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import CoreImage
 
 struct ApiSetupView: View {
     @ObservedObject private var api = ApiSettingsStore.shared
@@ -322,6 +323,28 @@ struct ApiSetupView: View {
                 }
 
             case .disconnected, .connecting, .waitPhoneNumber:
+                Button {
+                    mtproto.requestQrCodeLogin()
+                } label: {
+                    if mtproto.isBusyAuth {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Requesting QR Code...")
+                        }
+                    } else {
+                        Label("📷 1-Click Instant QR Login (Scan with Phone)", systemImage: "qrcode.viewfinder")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle(color: AppTheme.cyan))
+                .disabled(mtproto.isBusyAuth)
+
+                HStack {
+                    Rectangle().fill(AppTheme.border).frame(height: 1)
+                    Text("OR SIGN IN WITH PHONE").font(.system(size: 10, weight: .bold)).foregroundColor(AppTheme.textSecondary)
+                    Rectangle().fill(AppTheme.border).frame(height: 1)
+                }
+                .padding(.vertical, 4)
+
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Mobile Number (with Country Code)")
                         .font(.caption.weight(.semibold))
@@ -348,6 +371,43 @@ struct ApiSetupView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle(color: AppTheme.emerald))
                 .disabled(mtproto.isBusyAuth)
+
+            case .waitQrCode(let link):
+                VStack(spacing: 14) {
+                    Text("Instant Telegram QR Login")
+                        .font(.headline.weight(.bold))
+                        .foregroundColor(AppTheme.cyan)
+
+                    Text("1. Open Telegram on your PC or phone\n2. Go to Settings > Devices > Link Desktop Device\n3. Scan this QR code to log in instantly")
+                        .font(.caption)
+                        .foregroundColor(AppTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+
+                    if let qrImg = generateQRCode(from: link) {
+                        Image(uiImage: qrImg)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 220, height: 220)
+                            .padding(12)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .shadow(color: AppTheme.cyan.opacity(0.3), radius: 10, x: 0, y: 4)
+                    } else {
+                        ProgressView("Rendering QR Code...")
+                            .frame(width: 220, height: 220)
+                    }
+
+                    Button {
+                        mtproto.resetAuthFlow()
+                    } label: {
+                        Text("Cancel QR Login")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
 
             case .waitCode:
                 Text("Enter 5-Digit OTP Code from Telegram")
@@ -494,5 +554,22 @@ struct ApiSetupView: View {
         .padding(10)
         .background((ok ? AppTheme.emerald : AppTheme.danger).opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func generateQRCode(from string: String) -> UIImage? {
+        let data = Data(string.utf8)
+        if let filter = CIFilter(name: "CIQRCodeGenerator") {
+            filter.setValue(data, forKey: "inputMessage")
+            filter.setValue("M", forKey: "inputCorrectionLevel")
+            if let outputImage = filter.outputImage {
+                let transform = CGAffineTransform(scaleX: 10, y: 10)
+                let scaledImage = outputImage.transformed(by: transform)
+                let context = CIContext()
+                if let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) {
+                    return UIImage(cgImage: cgImage)
+                }
+            }
+        }
+        return nil
     }
 }
