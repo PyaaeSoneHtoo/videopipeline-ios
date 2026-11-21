@@ -339,9 +339,9 @@ struct ApiSetupView: View {
                 .disabled(mtproto.isBusyAuth)
 
                 HStack {
-                    Rectangle().fill(AppTheme.border).frame(height: 1)
+                    Rectangle().fill(AppTheme.surfaceCardBorder).frame(height: 1)
                     Text("OR SIGN IN WITH PHONE").font(.system(size: 10, weight: .bold)).foregroundColor(AppTheme.textSecondary)
-                    Rectangle().fill(AppTheme.border).frame(height: 1)
+                    Rectangle().fill(AppTheme.surfaceCardBorder).frame(height: 1)
                 }
                 .padding(.vertical, 4)
 
