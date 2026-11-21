@@ -111,8 +111,10 @@ final class ApiSettingsStore: ObservableObject {
         self.preferredProvider = AIProvider(rawValue: rawProv) ?? .gemini
 
         self.telegramPhone = d.string(forKey: Keys.tgPhone) ?? ""
-        self.telegramApiId = d.string(forKey: Keys.tgApiId) ?? ""
-        self.telegramApiHash = d.string(forKey: Keys.tgApiHash) ?? ""
+        let savedApiId = d.string(forKey: Keys.tgApiId) ?? ""
+        self.telegramApiId = savedApiId.isEmpty ? "33821639" : savedApiId
+        let savedApiHash = d.string(forKey: Keys.tgApiHash) ?? ""
+        self.telegramApiHash = savedApiHash.isEmpty ? "22533aeb1ea63aab9329e0f47f280118" : savedApiHash
     }
 
     // MARK: - Import .env or JSON Config File (from PC Video Pipeline Suite)

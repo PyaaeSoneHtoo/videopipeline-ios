@@ -61,9 +61,9 @@ jobs:
           fi
           cp -R "$APP_PATH" dist/Payload/
           cd dist
-          zip -r -y VideoPipelineSuite-v1.3.4-unsigned.ipa Payload
+          zip -r -y VideoPipelineSuite-v1.4.0-unsigned.ipa Payload
           rm -rf Payload
-          ls -lh VideoPipelineSuite-v1.3.4-unsigned.ipa
+          ls -lh VideoPipelineSuite-v1.4.0-unsigned.ipa
 
       - name: Upload Unsigned IPA as Workflow Artifact
         uses: actions/upload-artifact@v4
@@ -76,10 +76,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.3.4-ios
-          name: "Video Pipeline Suite for iOS v1.3.4 (Gemini 3.x PC Model Lineup & Smart Cascade)"
+          tag_name: v1.4.0-ios
+          name: "Video Pipeline Suite for iOS v1.4.0 (Embedded MTProto & Cloud Scheduler)"
           body: |
-            ### 🍎 Video Pipeline Suite for iOS v1.3.4 (Gemini 3.x PC Lineup & Smart Cascade)
+            ### 🍎 Video Pipeline Suite for iOS v1.4.0 (Embedded MTProto & Cloud Scheduler)
 
             Official **Video Pipeline Suite** logo + full personal **Telegram MTProto** engine (**Team & Business Plans**):
             - 🤖 **100% Matching PC Gemini Model Lineup**: Upgraded to Google's active generation models (`gemini-3-flash-preview`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-flash-lite-latest`, `gemini-3.8-flash`, etc.) matching PC Suite `gemini_detector.py`.
