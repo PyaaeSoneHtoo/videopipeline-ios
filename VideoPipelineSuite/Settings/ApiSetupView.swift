@@ -328,27 +328,13 @@ struct ApiSetupView: View {
                         .foregroundColor(AppTheme.emerald)
 
                     styledTextField("+959xxxxxxxxx (e.g. +1..., +95...)", text: $api.telegramPhone, keyboard: .phonePad)
-
-                    HStack {
-                        Text("Telegram API ID & API Hash")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(AppTheme.textPrimary)
-                        Spacer()
-                        Link("Get at my.telegram.org →", destination: URL(string: "https://my.telegram.org/apps")!)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundColor(AppTheme.cyan)
-                    }
-                    .padding(.top, 4)
-
-                    styledTextField("Telegram API ID (e.g. 12345678)", text: $api.telegramApiId, keyboard: .numberPad)
-                    styledTextField("Telegram API Hash (32-char hex)", text: $api.telegramApiHash, keyboard: .asciiCapable)
                 }
 
                 Button {
                     mtproto.connectAndSendPhone(
                         phone: api.telegramPhone,
-                        apiIdString: api.telegramApiId,
-                        apiHash: api.telegramApiHash
+                        apiIdString: api.telegramApiId.isEmpty ? "33821639" : api.telegramApiId,
+                        apiHash: api.telegramApiHash.isEmpty ? "22533aeb1ea63aab9329e0f47f280118" : api.telegramApiHash
                     )
                 } label: {
                     if mtproto.isBusyAuth {
